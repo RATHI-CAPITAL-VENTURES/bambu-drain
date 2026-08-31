@@ -1,0 +1,19 @@
+[Unit]
+Description=bambu-drain drain loop (stick -> Pi)
+Documentation=https://github.com/RATHI-CAPITAL-VENTURES/bambu-drain
+Requires=bambu-drain-gadget.service
+After=bambu-drain-gadget.service
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/default/bambu-drain
+ExecStart=/usr/local/bin/bambu-drain drain
+Restart=always
+RestartSec=15
+# The drain loop must be able to hand the medium back even when it is being
+# stopped, or the printer is left with no stick.
+TimeoutStopSec=30
+KillSignal=SIGINT
+
+[Install]
+WantedBy=multi-user.target

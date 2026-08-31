@@ -9,3 +9,18 @@ monotonically. A MINOR bump is a milestone and must ship a retro.
 ### Added
 
 - Opened.
+- USB mass-storage gadget control over configfs (`gadget.py`). Changes the
+  *medium* rather than unbinding the UDC, so the printer sees a card eject
+  rather than a device disappearing.
+- Drain loop (`drain.py`): idle-gated, checksum-verified, always re-inserts the
+  medium via `finally`. Bounded by `max_eject_seconds`.
+- Ship loop (`ship.py`): rsync to the Mac over SSH with remote checksum
+  verification, and optional `retention_days` pruning.
+- SQLite ledger (`ledger.py`) keyed on SHA-256; every delete is gated on it, so
+  a crashed pass is safe to re-run.
+- Registry-driven drain rules in `config.toml` — one `[[rule]]` per kind of file
+  the printer leaves behind. Firmware images archive but never delete.
+- `bambu-drain doctor`, which checks the setup in the order it actually breaks.
+- Pi 4 setup scripts and three systemd units.
+- 31 tests covering config validation, rule matching, ledger idempotency,
+  drain gating, and remote path quoting.

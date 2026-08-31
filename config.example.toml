@@ -1,0 +1,76 @@
+# bambu-drain — the Pi pretends to be a USB stick; the stick never fills up.
+#
+# Copy to /etc/bambu-drain/config.toml on the Pi and edit.
+
+[gadget]
+name       = "bambu"
+udc        = ""                          # "" = autodetect the first UDC
+image      = "/srv/bambu-drain/stick.img"
+size_gb    = 32                          # what the printer will see
+fs         = "exfat"                     # "exfat" or "fat32" — see README
+vendor     = "BambuDrn"                  # <= 8 chars (SCSI inquiry)
+product    = "Drain"                     # <= 16 chars
+serial     = "BD00000001"
+
+[drain]
+# The gadget is only ejected when the printer has been quiet this long. The
+# signal is the backing image's mtime — purely local, no network, no MQTT.
+idle_minutes         = 5
+# Never move a file younger than this, even during an idle window.
+min_file_age_minutes = 2
+poll_seconds         = 30
+mount_point          = "/mnt/bambu-stick"
+staging              = "/srv/bambu-drain/staging"
+# Refuse to drain if staging is over budget — protects the Pi's root fs when
+# the ship loop is broken or the Mac is off.
+staging_max_gb       = 64
+# If a drain pass somehow runs long, re-insert the media anyway. The printer
+# seeing media come back matters more than finishing the pass.
+max_eject_seconds    = 120
+
+# --- what to drain -----------------------------------------------------------
+# A registry, not branches. One row per kind of file the printer leaves behind.
+# Order matters only for `dest`: the first matching rule wins.
+
+[[rule]]
+glob   = "**/*.mp4"
+dest   = "timelapse"
+delete = true
+
+[[rule]]
+glob   = "**/*.avi"
+dest   = "timelapse"
+delete = true
+
+[[rule]]
+glob   = "**/*.3mf"
+dest   = "models"
+delete = true
+
+[[rule]]
+glob   = "**/*.gcode"
+dest   = "models"
+delete = true
+
+[[rule]]
+glob   = "**/*.png"
+dest   = "thumbnails"
+delete = true
+
+# Firmware images you drop on the stick on purpose. Archived, never deleted —
+# the printer needs them to stay put to actually apply the update.
+[[rule]]
+glob   = "**/*.bbl.bin"
+dest   = "firmware"
+delete = false
+
+[ship]
+host          = "ishan-mac"              # an ssh alias in the Pi's ~/.ssh/config
+dest          = "~/Library/Mobile Documents/com~apple~CloudDocs/BambuArchive"
+ssh_key       = "/home/pi/.ssh/id_ed25519"
+poll_seconds  = 300
+# 0 = keep forever. Set to e.g. 60 if iCloud starts hurting.
+retention_days = 0
+
+[health]
+status_file = "/srv/bambu-drain/status.json"

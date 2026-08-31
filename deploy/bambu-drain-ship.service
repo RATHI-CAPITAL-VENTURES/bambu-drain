@@ -1,0 +1,15 @@
+[Unit]
+Description=bambu-drain ship loop (Pi -> Mac/iCloud)
+Documentation=https://github.com/RATHI-CAPITAL-VENTURES/bambu-drain
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/default/bambu-drain
+ExecStart=/usr/local/bin/bambu-drain ship
+Restart=always
+RestartSec=60
+
+[Install]
+WantedBy=multi-user.target
