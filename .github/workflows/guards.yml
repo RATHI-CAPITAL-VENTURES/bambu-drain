@@ -1,0 +1,54 @@
+name: guards
+
+# One job for all the cheap checks. They are cheap precisely because they read
+# git and a few files — no install, no build — so splitting them across jobs
+# would spend more on runner startup than on the checks themselves.
+#
+# `edited` is in the trigger list on purpose: the PR-title guard fails on a
+# title, and a title is fixed by editing it. Without `edited` the only way to
+# clear that red is a pointless empty push.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited, labeled, unlabeled]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  guards:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The guards diff against the merge base, which does not exist in a
+          # shallow clone. Without this every guard sees "every file changed".
+          fetch-depth: 0
+
+      - name: guards
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
+        run: bash .github/scripts/guards.sh all
+
+  # The guards' own test suite. It builds throwaway git repos, so it costs real
+  # seconds and earns them only when the guard logic could have moved.
+  self-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: did .github change?
+        id: scope
+        run: |
+          git fetch --depth=1 origin "${{ github.event.pull_request.base.sha }}"
+          if git diff --name-only "${{ github.event.pull_request.base.sha }}" HEAD \
+               | grep -q '^\.github/'; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: guard self-test
+        if: steps.scope.outputs.run == 'true'
+        run: bash .github/scripts/guards.test.sh
