@@ -27,8 +27,4 @@ stick and drains it continuously. See `docs/retros/0.2.0.md`.
 - 31 tests covering config validation, rule matching, ledger idempotency,
   drain gating, and remote path quoting.
 
-## 0.1.0 — 2026-08-31
-
-### Added
-
-- Opened.
+Older series are archived under `docs/changelog/`.
