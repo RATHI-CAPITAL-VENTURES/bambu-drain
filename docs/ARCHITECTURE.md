@@ -132,6 +132,53 @@ copy and retries.
 broken ship loop would trade the printer's full disk for the Pi's — a strictly
 worse failure, because the Pi is also the thing that fixes it.
 
+## Two environment traps, found on real hardware
+
+Both were found during the first install and both are the same shape: a check
+that *looks* like it passed.
+
+### `config.txt` is sectioned, and the stock image already has a dwc2 line
+
+Raspberry Pi OS ships `dtoverlay=dwc2,dr_mode=host` under a **`[cm5]`** section.
+On a Pi 4 Model B that line is inert — but it is still a `dtoverlay=dwc2` line,
+so a naive `grep` finds it, concludes the overlay is configured, and skips.
+`/sys/class/udc` then stays empty forever with no error anywhere.
+
+There are therefore two independent ways to get this wrong: the wrong
+`dr_mode`, and the right `dr_mode` in a section that never applies. Only a line
+at the top of the file or under `[all]` counts, and `setup/01-enable-dwc2.sh`
+now parses sections rather than grepping. It appends under `[all]` and leaves
+inert lines alone, reporting them.
+
+### The Mac's rsync is openrsync, and the destination must NOT be quoted
+
+macOS ships **openrsync, protocol 29**. It predates `--protect-args` and
+rejects both that and `--old-args` outright. A `shlex.quote`-ed destination
+does not get unquoted by anything, so the quote characters land in the
+filename — observed as `/Users/ishan/'Library/Mobile Documents/...'`.
+
+So one path is consumed under two different rules, and getting them backwards
+fails silently:
+
+| Consumer | Rule |
+|---|---|
+| `rsync` destination | raw, absolute, **never quoted** |
+| `ssh mkdir` / `shasum` / `find` | `shlex.quote` |
+
+`remote_abs()` resolves `$HOME` on the Mac once so no tilde ever reaches rsync,
+and `shell_arg()` is the quoted form. This was determined empirically against
+the real pair, not from the manual.
+
+### Services run as root, so the SSH alias must be system-wide
+
+The drain loop needs configfs and `mount`. A `Host` block in the login user's
+`~/.ssh/config` is invisible to root, and `doctor` then reports the Mac as
+unreachable — which reads like a network fault. The alias belongs in
+`/etc/ssh/ssh_config.d/`, defined once.
+
+Related: point it at the Mac's mDNS `.local` name, not its IP. The Mac's
+address moved during this project's own setup.
+
 ## Known gaps
 
 - **The 4 GB question is open.** exFAT is the default and has no per-file limit.
@@ -141,6 +188,9 @@ worse failure, because the Pi is also the thing that fixes it.
 - **Nothing alerts actively yet.** `status.json` is written and `bambu-drain
   status` reports `staging_pct`, but nothing pushes. Feeding this to RIA (which
   already runs 24/7 on the Mac and can text) is the obvious next step.
-- **Untested against real hardware.** Every pure-logic path has tests; the
-  configfs and mount paths cannot be exercised without the Pi wired to the
-  printer. `drain --once --dry-run` exists for exactly that first run.
+- **Untested against the printer.** The full software path is now proven on the
+  real Pi 4: gadget created and bound to `fe980000.usb`, a root-level file and a
+  nested file drained off the image, shipped to iCloud, and verified identical
+  by SHA-256 on both ends. What remains unproven is the printer itself — whether
+  it mounts the exFAT image, and whether its write pattern trips the idle gate
+  in a way a synthetic test does not.

@@ -25,12 +25,42 @@ CMDLINE="$BOOT/cmdline.txt"
 
 changed=0
 
-if ! grep -qE '^\s*dtoverlay=dwc2' "$CONFIG"; then
-  printf '\n# bambu-drain: USB peripheral mode on the USB-C port\ndtoverlay=dwc2,dr_mode=peripheral\n' >> "$CONFIG"
-  echo "· config.txt: added dtoverlay=dwc2,dr_mode=peripheral"
+# config.txt is SECTIONED. A `dtoverlay=` under [cm4], [cm5] or [pi5] is inert
+# on a Pi 4 Model B, and the stock Raspberry Pi OS image ships exactly that:
+# `dtoverlay=dwc2,dr_mode=host` under [cm5]. So there are two independent ways
+# to get this wrong, and checking only for the overlay's presence hits both:
+# the line can have the wrong dr_mode, AND it can be in a section that never
+# applies. Only a line at the top of the file or under [all] counts.
+scan_dwc2() {  # $1: "effective" | "inert"
+  awk -v want="$1" '
+    /^\[/            { section = $0; next }
+    /^[[:space:]]*dtoverlay=dwc2/ {
+      eff = (section == "" || section == "[all]") ? "effective" : "inert"
+      if (eff == want) printf "%d:%s %s\n", FNR, (section == "" ? "[top]" : section), $0
+    }
+  ' "$CONFIG"
+}
+
+inert=$(scan_dwc2 inert)
+if [ -n "$inert" ]; then
+  echo "· config.txt: ignoring dwc2 lines in sections that do not apply here:"
+  echo "$inert" | sed 's/^/    /'
+fi
+
+effective=$(scan_dwc2 effective)
+if [ -z "$effective" ]; then
+  printf '\n[all]\n# bambu-drain: USB peripheral mode on the USB-C port\ndtoverlay=dwc2,dr_mode=peripheral\n' >> "$CONFIG"
+  echo "· config.txt: appended dtoverlay=dwc2,dr_mode=peripheral under [all]"
   changed=1
+elif printf '%s' "$effective" | grep -q 'dr_mode=peripheral'; then
+  echo "· config.txt: dwc2 already effective in peripheral mode"
 else
-  echo "· config.txt: dwc2 overlay already present"
+  echo "· config.txt: effective dwc2 line has the wrong dr_mode, rewriting:"
+  echo "$effective" | sed 's/^/    was: /'
+  line=${effective%%:*}
+  sed -i "${line}s|.*|dtoverlay=dwc2,dr_mode=peripheral|" "$CONFIG"
+  echo "    now: dtoverlay=dwc2,dr_mode=peripheral"
+  changed=1
 fi
 
 if ! grep -q 'modules-load=dwc2' "$CMDLINE"; then

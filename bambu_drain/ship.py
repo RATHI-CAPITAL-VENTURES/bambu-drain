@@ -23,23 +23,49 @@ class ShipError(RuntimeError):
     pass
 
 
-def remote_path(dest: str, rel: str) -> str:
-    """Quote a remote path that may contain spaces and a leading ~.
+def remote_abs(dest: str, rel: str, home: str) -> str:
+    """The absolute remote path, tilde already expanded, NOT shell-quoted.
 
-    `~/Library/Mobile Documents/com~apple~CloudDocs/...` is the normal case and
-    it contains both hazards at once: the tilde must stay unquoted so the remote
-    shell expands it, and the spaces must be quoted so it does not word-split.
+    Two different quoting rules apply to the same path and getting them
+    backwards is silent: rsync's destination must stay raw, while `ssh mkdir`
+    and `ssh shasum` need `shlex.quote`.
+
+    Why rsync must stay raw: the Mac ships **openrsync at protocol 29**, which
+    predates `--protect-args` and rejects both it and `--old-args` outright.
+    Quoting the destination puts the quote characters into the filename —
+    observed as `/Users/ishan/'Library/Mobile Documents/...'`. Determined
+    empirically against the real pair, not from the manual.
     """
-    full = f"{dest.rstrip('/')}/{rel}"
-    if full.startswith("~/"):
-        return "~/" + shlex.quote(full[2:])
-    return shlex.quote(full)
+    if dest == "~":
+        dest = home
+    elif dest.startswith("~/"):
+        dest = f"{home.rstrip('/')}/{dest[2:]}"
+    base = dest.rstrip("/")
+    return f"{base}/{rel}" if rel else base
+
+
+def shell_arg(path: str) -> str:
+    """Quote an already-absolute path for a remote shell command."""
+    return shlex.quote(path)
 
 
 class Shipper:
     def __init__(self, cfg, ledger: Ledger):
         self.cfg = cfg
         self.ledger = ledger
+        self._home: str | None = None
+
+    def remote_home(self) -> str:
+        """Resolve `$HOME` on the Mac once, so no tilde ever reaches rsync."""
+        if self._home is None:
+            proc = self._ssh('printf %s "$HOME"')
+            if proc.returncode != 0 or not proc.stdout.strip():
+                raise ShipError(f"could not resolve $HOME on {self.cfg.ship.host}")
+            self._home = proc.stdout.strip()
+        return self._home
+
+    def abs_path(self, rel: str) -> str:
+        return remote_abs(self.cfg.ship.dest, rel, self.remote_home())
 
     def _ssh(self, *command: str) -> subprocess.CompletedProcess:
         return subprocess.run(
@@ -80,10 +106,11 @@ class Shipper:
                 continue
 
             rel = row["dest_rel"]
-            target = remote_path(self.cfg.ship.dest, rel)
-            parent = remote_path(self.cfg.ship.dest, str(Path(rel).parent))
+            target = self.abs_path(rel)
+            parent_rel = str(Path(rel).parent)
+            parent = self.abs_path("" if parent_rel == "." else parent_rel)
 
-            if self._ssh(f"mkdir -p {parent}").returncode != 0:
+            if self._ssh(f"mkdir -p {shell_arg(parent)}").returncode != 0:
                 log.error("could not create remote dir for %s", rel)
                 continue
 
@@ -92,6 +119,7 @@ class Shipper:
                     "rsync", "-a", "--partial", "--inplace",
                     "-e", f"ssh -i {self.cfg.ship.ssh_key} -o BatchMode=yes",
                     str(local),
+                    # Raw, unquoted: see remote_abs().
                     f"{self.cfg.ship.host}:{target}",
                 ],
                 capture_output=True,
@@ -104,7 +132,7 @@ class Shipper:
             # Verify on the far side. iCloud will upload it afterwards on its
             # own schedule; what we assert here is that it is durably on the
             # Mac's disk, which is the thing we can actually check.
-            probe = self._ssh(f"shasum -a 256 {target}")
+            probe = self._ssh(f"shasum -a 256 {shell_arg(target)}")
             remote_sha = probe.stdout.split()[0] if probe.returncode == 0 and probe.stdout else ""
             verified = remote_sha == row["sha256"]
             if not verified:
@@ -128,8 +156,8 @@ class Shipper:
         days = self.cfg.ship.retention_days
         if days <= 0:
             return 0
-        base = remote_path(self.cfg.ship.dest, "")
-        cmd = f"find {base} -type f -mtime +{days} -delete -print"
+        base = self.abs_path("")
+        cmd = f"find {shell_arg(base)} -type f -mtime +{days} -delete -print"
         proc = self._ssh(cmd)
         if proc.returncode != 0:
             return 0

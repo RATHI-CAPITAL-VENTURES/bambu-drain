@@ -67,7 +67,8 @@ delete = false
 [ship]
 host          = "ishan-mac"              # an ssh alias in the Pi's ~/.ssh/config
 dest          = "~/Library/Mobile Documents/com~apple~CloudDocs/BambuArchive"
-ssh_key       = "/home/pi/.ssh/id_ed25519"
+# Must match the Pi's real user — Raspberry Pi OS no longer defaults to "pi".
+ssh_key       = "/home/rpi/.ssh/id_ed25519"
 poll_seconds  = 300
 # 0 = keep forever. Set to e.g. 60 if iCloud starts hurting.
 retention_days = 0

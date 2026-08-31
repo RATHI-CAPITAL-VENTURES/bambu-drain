@@ -24,7 +24,19 @@ stick and drains it continuously. See `docs/retros/0.2.0.md`.
   the printer leaves behind. Firmware images archive but never delete.
 - `bambu-drain doctor`, which checks the setup in the order it actually breaks.
 - Pi 4 setup scripts and three systemd units.
-- 31 tests covering config validation, rule matching, ledger idempotency,
-  drain gating, and remote path quoting.
+- 33 tests covering config validation, rule matching, ledger idempotency,
+  drain gating, and remote path handling.
+- `setup/bootstrap.sh` — one privileged entry point (`prepare` / `verify` /
+  `start`), so the install is a single sudo prompt rather than eight.
+
+### Fixed
+
+- `01-enable-dwc2.sh` now parses `config.txt` **sections**. The stock image
+  ships `dtoverlay=dwc2,dr_mode=host` under `[cm5]`, which is inert on a Pi 4
+  but satisfies a naive grep — leaving `/sys/class/udc` empty with no error.
+- Ship paths: the rsync destination must be raw and the shell arguments quoted,
+  because macOS ships openrsync (protocol 29) with no `--protect-args`. Quoting
+  the destination put literal quote characters in the filename.
+- `.gitignore` now covers `__pycache__`, which was being committed.
 
 Older series are archived under `docs/changelog/`.

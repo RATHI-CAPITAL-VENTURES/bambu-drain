@@ -68,24 +68,41 @@ A Pi 4 browning out mid-write is how the backing image gets corrupted.
 
 ## Install
 
-On the Pi:
+On the Pi — one privileged entry point, so it is a single sudo prompt:
 
 ```sh
-sudo setup/01-enable-dwc2.sh          # boot config; requires a reboot
+sudo setup/bootstrap.sh prepare       # boot config + image + install
 sudo reboot
-ls /sys/class/udc                     # must be non-empty after reboot
+ls /sys/class/udc                     # MUST be non-empty; nothing works otherwise
 
-sudo setup/02-create-image.sh 32 exfat
-sudo setup/03-install.sh
-sudo nano /etc/bambu-drain/config.toml   # set ship.host and ship.dest
-sudo bambu-drain doctor
+sudo nano /etc/bambu-drain/config.toml   # set ship.host, ship.dest, ssh_key
+sudo setup/bootstrap.sh verify        # gadget + doctor + dry-run drain
+sudo setup/bootstrap.sh start         # enable and start the three services
 ```
 
-Then give the Pi an SSH key to the Mac (`ssh-copy-id`), and:
+The individual `01-`/`02-`/`03-` scripts still exist and are safe to re-run on
+their own; `bootstrap.sh` just sequences them.
+
+### The destination alias must resolve for **root**
+
+The drain loop needs configfs and `mount`, so the services run as root. A
+`Host` block in `~/.ssh/config` belonging to your login user is invisible to
+root, and `doctor` reports the Mac as unreachable — which reads like a network
+fault and is not one. Put it system-wide instead:
 
 ```sh
-sudo systemctl start bambu-drain-gadget bambu-drain bambu-drain-ship
+sudo tee /etc/ssh/ssh_config.d/10-bambu-drain.conf <<'EOF'
+Host ishan-mac
+  HostName your-mac.local
+  User you
+  IdentityFile /home/rpi/.ssh/id_ed25519
+  IdentitiesOnly yes
+  StrictHostKeyChecking accept-new
+EOF
 ```
+
+Use the Mac's **mDNS `.local` name, not its IP** — the IP is a DHCP lease and
+will move. It moved once during this project's own setup.
 
 ## Before you trust it
 
