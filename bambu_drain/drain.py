@@ -102,6 +102,21 @@ class Drainer:
             )
         return None
 
+    def _ensure_medium_present(self) -> None:
+        try:
+            present = self.gadget.media_present
+        except (OSError, AttributeError):
+            return  # gadget not created yet; the gadget service owns that
+        if present:
+            return
+        log.warning(
+            "medium was absent at the start of a pass — re-inserting. "
+            "A previous pass died between eject and insert, and the printer "
+            "has had no storage since."
+        )
+        self.ledger.event("medium_reinserted", "found absent at start of pass")
+        self.gadget.cycle_in()
+
     # -- a pass ------------------------------------------------------------
 
     def run_once(self, dry_run: bool = False) -> dict:
@@ -115,6 +130,18 @@ class Drainer:
             return {"skipped": str(exc), "moved": 0, "bytes": 0}
 
     def _run_once_locked(self, dry_run: bool = False) -> dict:
+        # Self-heal first, before any gate.
+        #
+        # If a pass ever dies between eject and insert — a crash, a SIGKILL, an
+        # interrupted manual command — the printer is left looking at a card
+        # reader with no card. It reports "no USB drive" and silently has
+        # nowhere to write, which is indistinguishable from the cable falling
+        # out and is exactly the failure this project exists to prevent.
+        #
+        # This is safe precisely here: we hold the drain lock, so no other pass
+        # is legitimately mid-cycle with the medium out on purpose.
+        self._ensure_medium_present()
+
         reason = self.blocked_reason()
         if reason:
             log.debug("skipping drain: %s", reason)

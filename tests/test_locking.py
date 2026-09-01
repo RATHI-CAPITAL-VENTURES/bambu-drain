@@ -76,6 +76,7 @@ class TestDrainIsSerialised(unittest.TestCase):
 
     def test_a_second_pass_reports_a_skip_instead_of_racing(self):
         class FakeGadget:
+            media_present = True
             def idle_seconds(self): return 99999
             def cycle_out(self, settle_seconds=1.0): pass
             def cycle_in(self): pass
@@ -95,6 +96,7 @@ class TestDrainIsSerialised(unittest.TestCase):
         touched = []
 
         class SpyGadget:
+            media_present = True
             def idle_seconds(self): return 99999
             def cycle_out(self, settle_seconds=1.0): touched.append("out")
             def cycle_in(self): touched.append("in")

@@ -162,6 +162,34 @@ delete. A pass that dies between "copied" and "deleted" re-runs and simply
 deletes; a pass that dies between "uploaded" and "verified" keeps the staging
 copy and retries.
 
+## The medium must never be left out
+
+A gadget with no backing file is a card reader with no card. The printer reports
+"no USB drive" — the same thing it says when the cable has fallen out, or when
+the cable is charge-only — so the failure is silent and diagnosed wrongly.
+
+Every drain pass therefore re-inserts an absent medium **before any other
+gate**, including the idle gate. Healing has to happen while a print is running,
+because that is precisely when the printer needs its storage and when the idle
+gate would otherwise skip the pass entirely. It is safe there because the pass
+holds the drain lock, so nothing else is legitimately mid-cycle with the medium
+out on purpose.
+
+### Diagnosing "the printer doesn't see it"
+
+`/sys/class/udc/fe980000.usb/state` separates causes that look identical:
+
+| state | Means |
+|---|---|
+| `not attached` | no host, no VBUS — **usually a charge-only cable** |
+| `powered` / `addressed` | link up, enumeration incomplete |
+| `configured` | the host enumerated us; any remaining problem is the medium or the filesystem |
+
+Observed in exactly that order during the first hookup: a charge-only USB-C
+cable gave `not attached`; a real data cable gave `configured` but with the
+medium out, so the printer saw an empty reader. Both look like "it doesn't work"
+and have nothing in common. `doctor` now reports this line.
+
 ## One pass at a time
 
 `bambu-drain drain --once` is a reasonable thing to type while the service is

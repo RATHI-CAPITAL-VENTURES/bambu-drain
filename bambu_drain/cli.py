@@ -125,6 +125,15 @@ def cmd_doctor(args) -> int:
     check(f"backing image {cfg.gadget.image}", cfg.gadget.image.exists(),
           "run setup/02-create-image.sh")
     check("gadget created", gadget.exists, "bambu-drain gadget create")
+    if gadget.exists:
+        check("medium inserted", gadget.media_present,
+              "the printer sees an empty card reader — bambu-drain gadget insert")
+        state = Path("/sys/class/udc/fe980000.usb/state")
+        if state.exists():
+            st = state.read_text().strip()
+            check(f"host attached (usb state: {st})", st == "configured",
+                  "not attached = no host/VBUS: check the cable carries DATA, "
+                  "not just power. A charge-only cable gives exactly this.")
     check(f"ssh to {cfg.ship.host}", shipper.reachable(),
           f"ssh-copy-id -i {cfg.ship.ssh_key}.pub {cfg.ship.host}")
     return 0 if ok else 1

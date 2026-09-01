@@ -23,8 +23,9 @@ from bambu_drain.ledger import Ledger
 
 
 class FakeGadget:
-    def __init__(self, idle=99999):
+    def __init__(self, idle=99999, media_present=True):
         self._idle = idle
+        self.media_present = media_present
         self.cycled_out = 0
         self.cycled_in = 0
 
@@ -207,3 +208,41 @@ class TestShipDiagnosesTheRightEnd(unittest.TestCase):
              mock.patch.object(Shipper, "_ssh"):
             shipper.run_once()
         self.assertEqual(len(self.led.unshipped()), 0, "a lost file must stop being pending")
+
+
+class TestMediumSelfHeal(unittest.TestCase):
+    """The printer must never be left looking at an empty card reader.
+
+    If a pass dies between eject and insert, the printer reports "no USB drive"
+    and silently has nowhere to write — indistinguishable from the cable falling
+    out, and unnoticed until a print fails.
+    """
+
+    def setUp(self):
+        self.tmp = TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.led = Ledger(self.root / "ledger.db")
+        self.cfg = config.from_dict({
+            "gadget": {"image": str(self.root / "stick.img")},
+            "drain": {"idle_minutes": 999, "staging": str(self.root / "staging")},
+            "rule": [{"glob": "**/*.mp4", "dest": "timelapse"}],
+        })
+
+    def tearDown(self):
+        self.led.close()
+        self.tmp.cleanup()
+
+    def test_absent_medium_is_reinserted_even_when_the_gate_is_closed(self):
+        # idle_minutes=999 means the drain itself will not run. Healing must
+        # still happen — a printer mid-print is exactly when it matters most.
+        g = FakeGadget(idle=0, media_present=False)
+        d = Drainer(self.cfg, self.led, g)
+        result = d.run_once()
+        self.assertIsNotNone(result["skipped"], "gate should still be closed")
+        self.assertEqual(g.cycled_in, 1, "medium must be re-inserted anyway")
+        self.assertIn("medium_reinserted", [r["kind"] for r in self.led.recent_events()])
+
+    def test_present_medium_is_left_alone(self):
+        g = FakeGadget(idle=0, media_present=True)
+        Drainer(self.cfg, self.led, g).run_once()
+        self.assertEqual(g.cycled_in, 0)

@@ -31,6 +31,13 @@ stick and drains it continuously. See `docs/retros/0.2.0.md`.
 
 ### Fixed
 
+- **The medium could be left out, and the printer says nothing useful.** If a
+  pass died between eject and insert, the printer was left looking at a card
+  reader with no card — it reports "no USB drive", which is indistinguishable
+  from the cable falling out and goes unnoticed until a print fails. Every drain
+  pass now re-inserts an absent medium before any other gate, including while a
+  print is running. `doctor` checks it, and also reports the USB session state
+  with the charge-only-cable hint.
 - **Concurrency: nothing serialised the drain passes.** Running
   `drain --once` while the service was live raced the daemon — both ejecting the
   medium and mounting the same image. Worst case, one re-inserted the medium
