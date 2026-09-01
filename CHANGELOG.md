@@ -31,6 +31,12 @@ stick and drains it continuously. See `docs/retros/0.2.0.md`.
 
 ### Fixed
 
+- **Concurrency: nothing serialised the drain passes.** Running
+  `drain --once` while the service was live raced the daemon — both ejecting the
+  medium and mounting the same image. Worst case, one re-inserted the medium
+  while the other had it mounted read-write, handing the printer a filesystem
+  the Pi was writing to. Both loops now hold an exclusive `flock` for the whole
+  pass, taken before the gadget is touched.
 - **Data loss: a verified copy was not a durable copy.** `shutil.copy2` leaves
   data in the page cache, and the read-back checksum read it straight back out
   of that cache — confirming bytes that were never written to disk. The original

@@ -162,6 +162,25 @@ delete. A pass that dies between "copied" and "deleted" re-runs and simply
 deletes; a pass that dies between "uploaded" and "verified" keeps the staging
 copy and retries.
 
+## One pass at a time
+
+`bambu-drain drain --once` is a reasonable thing to type while the service is
+running, and until `lock.py` existed it raced the daemon. Both processes ejected
+the medium, mounted the same loop image, and enumerated the same files.
+
+The observed symptom was mild — a `FileNotFoundError` as one deleted a file the
+other was about to. The unobserved danger was not: nothing stopped process B
+calling `gadget insert` while process A held the image mounted read-write,
+handing the printer a filesystem the Pi was actively writing to. That is the
+block-level double-mount this whole design exists to prevent, reached from the
+inside rather than from the printer.
+
+Both loops now hold an exclusive `flock` for the entire pass, taken *before* the
+gadget is touched. It is non-blocking on purpose: a second pass should say so
+and exit, not queue behind the first and then act on a stick state it enumerated
+minutes ago. flock releases automatically when a process dies, so a crashed pass
+cannot wedge the daemon out of its own lock.
+
 ## Staging budget
 
 `staging_max_gb` blocks the drain loop when the Pi is filling up. Without it, a

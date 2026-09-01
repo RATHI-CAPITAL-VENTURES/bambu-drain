@@ -21,6 +21,7 @@ from pathlib import Path
 
 from . import imagefs
 from .gadget import MassStorageGadget
+from .lock import AlreadyRunning, single_instance
 from .ledger import Ledger
 
 log = logging.getLogger("bambu_drain.drain")
@@ -104,6 +105,16 @@ class Drainer:
     # -- a pass ------------------------------------------------------------
 
     def run_once(self, dry_run: bool = False) -> dict:
+        try:
+            with single_instance(self.cfg.drain_lock_path):
+                return self._run_once_locked(dry_run)
+        except AlreadyRunning as exc:
+            # Reported as a skip rather than raised: running `drain --once`
+            # while the daemon is mid-pass is normal, not an error.
+            log.info("%s", exc)
+            return {"skipped": str(exc), "moved": 0, "bytes": 0}
+
+    def _run_once_locked(self, dry_run: bool = False) -> dict:
         reason = self.blocked_reason()
         if reason:
             log.debug("skipping drain: %s", reason)
@@ -133,7 +144,7 @@ class Drainer:
                         # Already safely off the stick in a previous pass that
                         # died before the delete. Re-delete and move on.
                         if rule.delete and not dry_run:
-                            src.unlink()
+                            src.unlink(missing_ok=True)
                         continue
 
                     rel = dest_relpath(rule, src, st.st_mtime)
@@ -164,7 +175,7 @@ class Drainer:
                         sha, src.name, str(target.relative_to(d.staging)), st.st_size, target
                     )
                     if rule.delete:
-                        src.unlink()
+                        src.unlink(missing_ok=True)
 
                     moved += 1
                     total += st.st_size

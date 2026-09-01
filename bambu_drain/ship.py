@@ -15,6 +15,7 @@ import time
 from pathlib import Path
 
 from .ledger import Ledger
+from .lock import AlreadyRunning, single_instance
 
 log = logging.getLogger("bambu_drain.ship")
 
@@ -85,6 +86,14 @@ class Shipper:
         return self._ssh("true").returncode == 0
 
     def run_once(self) -> dict:
+        try:
+            with single_instance(self.cfg.ship_lock_path):
+                return self._run_once_locked()
+        except AlreadyRunning as exc:
+            log.info("%s", exc)
+            return {"shipped": 0, "bytes": 0, "pending": 0, "skipped": str(exc)}
+
+    def _run_once_locked(self) -> dict:
         pending = self.ledger.unshipped()
         if not pending:
             return {"shipped": 0, "bytes": 0, "pending": 0}

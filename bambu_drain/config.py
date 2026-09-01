@@ -77,6 +77,14 @@ class Config:
     def ledger_path(self) -> Path:
         return self.gadget.image.parent / "ledger.db"
 
+    @property
+    def drain_lock_path(self) -> Path:
+        return self.gadget.image.parent / "drain.lock"
+
+    @property
+    def ship_lock_path(self) -> Path:
+        return self.gadget.image.parent / "ship.lock"
+
 
 def _paths(d: dict, *keys: str) -> dict:
     out = dict(d)
