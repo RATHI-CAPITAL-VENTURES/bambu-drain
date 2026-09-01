@@ -119,6 +119,42 @@ Pi's own disk first, and the Pi is durable storage. The chain is
 copy → verify → delete-from-stick → ship → verify-remotely → delete-from-staging,
 and every step is recorded in the ledger so any crash is safe to re-run.
 
+## Durability: why a verified copy was not a safe copy
+
+The chain in "Two loops" says copy → verify → delete-from-stick. That was
+wrong, and a power cut proved it within a day of the software being installed.
+
+`shutil.copy2` leaves the data in the **page cache**. The read-back checksum
+then reads it *from that same cache* and confirms bytes that have never touched
+the disk. The verify passes honestly and means nothing. We then delete the
+original off the stick — destroying the only durable copy — and a power loss in
+that window loses the file outright.
+
+That is exactly what happened: a 150 MB file was drained, verified, deleted from
+the stick, and left as a **0-byte staging file** by an unclean shutdown two
+minutes later. ext4's delayed allocation had journalled the directory entry but
+never written the data. `dmesg` showed `EXT4-fs: orphan cleanup`. The file was
+unrecoverable.
+
+The fix is `fsync_file_and_parent()` before the verify and before the delete —
+the file's own descriptor *and* its parent directory, because durable data
+behind a non-durable directory entry is still unreachable. The ledger runs
+`PRAGMA synchronous=FULL` for the same reason: it gates every delete, so a
+commit lost to a power cut orphans a staged file that nothing will ever ship.
+
+**The general lesson, worth carrying to anything else that deletes a source
+after copying it:** a checksum proves the bytes are *correct*, not that they are
+*saved*. Those are different claims and only `fsync` makes the second one.
+
+### Diagnose the right end
+
+The same incident logged `remote checksum mismatch`. The Mac was fine — our own
+staged file was empty. Blaming the far end sends you debugging a network that
+was never broken while actual data loss goes unnoticed. `ship.py` now checks the
+local copy's size against the ledger *before* touching the network, and reports
+a truncated staged file as unrecoverable local loss rather than retrying against
+the remote forever.
+
 ## Ledger
 
 `ledger.db` (SQLite, WAL) keys on the file's SHA-256. `known()` gates every

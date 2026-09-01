@@ -40,6 +40,10 @@ class Ledger:
         self.db = sqlite3.connect(str(path), isolation_level=None)
         self.db.row_factory = sqlite3.Row
         self.db.execute("PRAGMA journal_mode=WAL")
+        # WAL defaults to synchronous=NORMAL, which does not fsync on commit.
+        # This ledger gates every delete from the printer's stick; a commit lost
+        # to a power cut orphans a staged file that nothing will ever ship.
+        self.db.execute("PRAGMA synchronous=FULL")
         self.db.executescript(SCHEMA)
 
     def close(self) -> None:

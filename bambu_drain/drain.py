@@ -13,6 +13,7 @@ media happily re-inserted.
 from __future__ import annotations
 
 import logging
+import os
 import shutil
 import time
 from datetime import datetime, timezone
@@ -28,6 +29,37 @@ log = logging.getLogger("bambu_drain.drain")
 def dest_relpath(rule, src: Path, when: float) -> str:
     d = datetime.fromtimestamp(when, tz=timezone.utc)
     return f"{rule.dest}/{d:%Y}/{d:%m}/{src.name}"
+
+
+def fsync_file_and_parent(path: Path) -> None:
+    """Force a staged copy to durable storage before anything is deleted.
+
+    This is the load-bearing line of the whole project, and it was missing.
+
+    `shutil.copy2` leaves the data in the page cache. A read-back checksum then
+    reads it *from that cache* and cheerfully confirms bytes that are not on the
+    disk yet — so the verify passes, we delete the original off the stick, and a
+    power loss in that window destroys the only durable copy.
+
+    Found the hard way: a 150 MB file was drained, verified, deleted from the
+    stick, and reduced to a 0-byte staging file by an unclean shutdown seconds
+    later. ext4's delayed allocation had journalled the directory entry but
+    never written the data. The file was gone.
+
+    The parent directory needs its own fsync: the file's data being durable is
+    no help if the directory entry pointing at it is not.
+    """
+    fd = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+    dfd = os.open(path.parent, os.O_RDONLY)
+    try:
+        os.fsync(dfd)
+    finally:
+        os.close(dfd)
 
 
 def _unique(path: Path, sha: str) -> Path:
@@ -115,6 +147,11 @@ class Drainer:
 
                     target.parent.mkdir(parents=True, exist_ok=True)
                     shutil.copy2(src, target)
+
+                    # Durability BEFORE verification, and both before the
+                    # delete. Verifying a page-cached copy proves nothing about
+                    # what survives a power cut.
+                    fsync_file_and_parent(target)
 
                     # Verify before the delete. This is the whole contract.
                     if imagefs.sha256(target) != sha or target.stat().st_size != st.st_size:

@@ -105,6 +105,26 @@ class Shipper:
                 self.ledger.event("staging_missing", row["src_name"])
                 continue
 
+            # Check OUR copy before blaming the network. When a power cut left a
+            # 0-byte staged file, the ship loop rsynced the emptiness, compared
+            # hashes, and reported "remote checksum mismatch" — pointing at the
+            # Mac when the damage was local and the original was already gone
+            # off the stick. A wrong diagnosis costs more than the failure.
+            actual = local.stat().st_size
+            if actual != row["size"]:
+                log.error(
+                    "LOCAL COPY CORRUPT: %s is %d bytes, ledger says %d. "
+                    "The original is already off the stick, so this file is lost. "
+                    "Not retrying.",
+                    rel_name := row["src_name"], actual, row["size"],
+                )
+                self.ledger.event(
+                    "local_corrupt",
+                    f"{rel_name}: {actual}/{row['size']} bytes — unrecoverable",
+                )
+                self.ledger.record_shipped(row["sha256"], verified=False)
+                continue
+
             rel = row["dest_rel"]
             target = self.abs_path(rel)
             parent_rel = str(Path(rel).parent)

@@ -31,6 +31,17 @@ stick and drains it continuously. See `docs/retros/0.2.0.md`.
 
 ### Fixed
 
+- **Data loss: a verified copy was not a durable copy.** `shutil.copy2` leaves
+  data in the page cache, and the read-back checksum read it straight back out
+  of that cache — confirming bytes that were never written to disk. The original
+  was then deleted from the stick. A power cut in that window destroyed a 150 MB
+  file for real, in testing, on day one. Now `fsync_file_and_parent()` runs
+  before the verify and before the delete, and the ledger uses
+  `PRAGMA synchronous=FULL`.
+- Ship errors blamed the wrong end: a 0-byte local file was reported as
+  "remote checksum mismatch". The local copy is now checked against the ledger
+  before the network is touched, and an unrecoverable file stops being retried.
+
 - `01-enable-dwc2.sh` now parses `config.txt` **sections**. The stock image
   ships `dtoverlay=dwc2,dr_mode=host` under `[cm5]`, which is inert on a Pi 4
   but satisfies a naive grep — leaving `/sys/class/udc` empty with no error.
