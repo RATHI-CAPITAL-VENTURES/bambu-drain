@@ -123,6 +123,21 @@ truncate a timelapse that grows past 4 GB.** If you are unsure whether the P2S
 mounts exFAT, format FAT32, run one long print, and check the video plays to the
 end — then decide. It is one command to reformat.
 
+## Making a timelapse the printer didn't save
+
+The chamber recording always reaches the drive; the assembled timelapse
+sometimes stays on the printer's internal storage. When that happens:
+
+```sh
+tools/make_timelapse.py "<archive>/prints/2026-09-02_0945"
+tools/make_timelapse.py "<archive>/prints/..." --length 90 --check
+```
+
+It samples the chamber footage — 1080p30, ~495,000 frames for a 4.6-hour print —
+into a clip of the length you ask for. Output is `timelapse-reconstructed.mp4`,
+deliberately not `timelapse.mp4`, so the archive never blurs what the printer
+made with what we assembled.
+
 ## Day to day
 
 ```sh

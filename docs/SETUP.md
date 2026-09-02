@@ -282,6 +282,12 @@ never reach the drive the Pi is presenting.
 
 Also turn timelapse **on** for prints you want captured.
 
+> **Expect the assembled timelapse to sometimes go to internal storage anyway.**
+> The chamber recording lands on the USB drive reliably; the timelapse did for
+> two short prints and did not for a 4.6-hour one. If a print folder has a full
+> `video/` and no `timelapse.mp4`, that is why —
+> `tools/make_timelapse.py` reconstructs one from the footage.
+
 Confirm by running a short print and checking that files appear:
 
 ```sh

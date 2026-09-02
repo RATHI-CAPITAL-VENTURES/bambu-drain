@@ -4,6 +4,28 @@
 header equals `VERSION`, is new relative to the base branch, and increases
 monotonically. A MINOR bump is a milestone and must ship a retro.
 
+## 0.4.1 — 2026-09-02
+
+### Added
+
+- **`tools/make_timelapse.py`** — reconstructs a timelapse from the chamber
+  segments when the printer kept the assembled one on internal storage. Samples
+  the real 1080p30 footage (~495,000 frames for a 4.6-hour print) rather than the
+  per-segment thumbnails, of which there are 22 — under a second of video.
+  Output is `timelapse-reconstructed.mp4`, never `timelapse.mp4`.
+- It refuses to start when segments are still evicted to iCloud, because
+  `ffprobe` blocks indefinitely on a placeholder rather than failing.
+
+A PATCH bump on purpose: the drain and ship loops are untouched. This is a
+manual utility beside them, not a change to what the system does on its own.
+
+### Changed
+
+- Documented that the assembled timelapse **may not reach the USB drive at all**.
+  Observed on three prints: two short ones wrote it to the drive, a 4.6-hour one
+  did not. `prints/<session>/timelapse.mp4` being absent therefore says nothing
+  about whether the drain worked.
+
 ## 0.4.0 — 2026-09-02
 
 
