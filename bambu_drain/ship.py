@@ -1,0 +1,196 @@
+"""Loop B — move what the Pi has to the Mac, at leisure.
+
+Runs with the gadget fully attached and the printer none the wiser. If the Mac
+is asleep or the Wi-Fi is out, this loop simply falls behind; the drain loop
+keeps the stick empty until staging hits its budget, and only then does anything
+user-visible happen.
+"""
+
+from __future__ import annotations
+
+import logging
+import shlex
+import subprocess
+import time
+from pathlib import Path
+
+from .ledger import Ledger
+from .lock import AlreadyRunning, single_instance
+
+log = logging.getLogger("bambu_drain.ship")
+
+
+class ShipError(RuntimeError):
+    pass
+
+
+def remote_abs(dest: str, rel: str, home: str) -> str:
+    """The absolute remote path, tilde already expanded, NOT shell-quoted.
+
+    Two different quoting rules apply to the same path and getting them
+    backwards is silent: rsync's destination must stay raw, while `ssh mkdir`
+    and `ssh shasum` need `shlex.quote`.
+
+    Why rsync must stay raw: the Mac ships **openrsync at protocol 29**, which
+    predates `--protect-args` and rejects both it and `--old-args` outright.
+    Quoting the destination puts the quote characters into the filename —
+    observed as `/Users/ishan/'Library/Mobile Documents/...'`. Determined
+    empirically against the real pair, not from the manual.
+    """
+    if dest == "~":
+        dest = home
+    elif dest.startswith("~/"):
+        dest = f"{home.rstrip('/')}/{dest[2:]}"
+    base = dest.rstrip("/")
+    return f"{base}/{rel}" if rel else base
+
+
+def shell_arg(path: str) -> str:
+    """Quote an already-absolute path for a remote shell command."""
+    return shlex.quote(path)
+
+
+class Shipper:
+    def __init__(self, cfg, ledger: Ledger):
+        self.cfg = cfg
+        self.ledger = ledger
+        self._home: str | None = None
+
+    def remote_home(self) -> str:
+        """Resolve `$HOME` on the Mac once, so no tilde ever reaches rsync."""
+        if self._home is None:
+            proc = self._ssh('printf %s "$HOME"')
+            if proc.returncode != 0 or not proc.stdout.strip():
+                raise ShipError(f"could not resolve $HOME on {self.cfg.ship.host}")
+            self._home = proc.stdout.strip()
+        return self._home
+
+    def abs_path(self, rel: str) -> str:
+        return remote_abs(self.cfg.ship.dest, rel, self.remote_home())
+
+    def _ssh(self, *command: str) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            [
+                "ssh",
+                "-i", str(self.cfg.ship.ssh_key),
+                "-o", "BatchMode=yes",
+                "-o", "ConnectTimeout=10",
+                self.cfg.ship.host,
+                *command,
+            ],
+            capture_output=True,
+            text=True,
+        )
+
+    def reachable(self) -> bool:
+        return self._ssh("true").returncode == 0
+
+    def run_once(self) -> dict:
+        try:
+            with single_instance(self.cfg.ship_lock_path):
+                return self._run_once_locked()
+        except AlreadyRunning as exc:
+            log.info("%s", exc)
+            return {"shipped": 0, "bytes": 0, "pending": 0, "skipped": str(exc)}
+
+    def _run_once_locked(self) -> dict:
+        pending = self.ledger.unshipped()
+        if not pending:
+            return {"shipped": 0, "bytes": 0, "pending": 0}
+
+        if not self.reachable():
+            log.info("%s unreachable; %d files waiting", self.cfg.ship.host, len(pending))
+            return {"shipped": 0, "bytes": 0, "pending": len(pending), "offline": True}
+
+        shipped = 0
+        total = 0
+        for row in pending:
+            staging_path = row["staging_path"]
+            if not staging_path:
+                continue
+            local = Path(staging_path)
+            if not local.exists():
+                log.error("staging file vanished: %s", local)
+                self.ledger.event("staging_missing", row["src_name"])
+                continue
+
+            # Check OUR copy before blaming the network. When a power cut left a
+            # 0-byte staged file, the ship loop rsynced the emptiness, compared
+            # hashes, and reported "remote checksum mismatch" — pointing at the
+            # Mac when the damage was local and the original was already gone
+            # off the stick. A wrong diagnosis costs more than the failure.
+            actual = local.stat().st_size
+            if actual != row["size"]:
+                log.error(
+                    "LOCAL COPY CORRUPT: %s is %d bytes, ledger says %d. "
+                    "The original is already off the stick, so this file is lost. "
+                    "Not retrying.",
+                    rel_name := row["src_name"], actual, row["size"],
+                )
+                self.ledger.event(
+                    "local_corrupt",
+                    f"{rel_name}: {actual}/{row['size']} bytes — unrecoverable",
+                )
+                self.ledger.record_shipped(row["sha256"], verified=False)
+                continue
+
+            rel = row["dest_rel"]
+            target = self.abs_path(rel)
+            parent_rel = str(Path(rel).parent)
+            parent = self.abs_path("" if parent_rel == "." else parent_rel)
+
+            if self._ssh(f"mkdir -p {shell_arg(parent)}").returncode != 0:
+                log.error("could not create remote dir for %s", rel)
+                continue
+
+            rsync = subprocess.run(
+                [
+                    "rsync", "-a", "--partial", "--inplace",
+                    "-e", f"ssh -i {self.cfg.ship.ssh_key} -o BatchMode=yes",
+                    str(local),
+                    # Raw, unquoted: see remote_abs().
+                    f"{self.cfg.ship.host}:{target}",
+                ],
+                capture_output=True,
+                text=True,
+            )
+            if rsync.returncode != 0:
+                log.error("rsync failed for %s: %s", rel, rsync.stderr.strip())
+                continue
+
+            # Verify on the far side. iCloud will upload it afterwards on its
+            # own schedule; what we assert here is that it is durably on the
+            # Mac's disk, which is the thing we can actually check.
+            probe = self._ssh(f"shasum -a 256 {shell_arg(target)}")
+            remote_sha = probe.stdout.split()[0] if probe.returncode == 0 and probe.stdout else ""
+            verified = remote_sha == row["sha256"]
+            if not verified:
+                log.error("remote checksum mismatch for %s — keeping staging copy", rel)
+                self.ledger.event("ship_mismatch", rel)
+                continue
+
+            self.ledger.record_shipped(row["sha256"], verified=True)
+            local.unlink(missing_ok=True)
+            self.ledger.clear_staging(row["sha256"])
+            shipped += 1
+            total += row["size"]
+            log.info("shipped %s (%.1f MB)", rel, row["size"] / 1024**2)
+
+        if shipped:
+            self.ledger.event("ship", f"{shipped} files, {total} bytes")
+        return {"shipped": shipped, "bytes": total, "pending": len(pending) - shipped}
+
+    def prune_remote(self) -> int:
+        """Apply retention_days on the Mac. 0 means keep forever."""
+        days = self.cfg.ship.retention_days
+        if days <= 0:
+            return 0
+        base = self.abs_path("")
+        cmd = f"find {shell_arg(base)} -type f -mtime +{days} -delete -print"
+        proc = self._ssh(cmd)
+        if proc.returncode != 0:
+            return 0
+        removed = len([ln for ln in proc.stdout.splitlines() if ln.strip()])
+        if removed:
+            self.ledger.event("prune", f"{removed} files older than {days}d")
+        return removed

@@ -1,0 +1,15 @@
+[Unit]
+Description=bambu-drain USB mass storage gadget
+Documentation=https://github.com/RATHI-CAPITAL-VENTURES/bambu-drain
+After=local-fs.target
+Before=bambu-drain.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+EnvironmentFile=/etc/default/bambu-drain
+ExecStart=/usr/local/bin/bambu-drain gadget create
+ExecStop=/usr/local/bin/bambu-drain gadget destroy
+
+[Install]
+WantedBy=multi-user.target
