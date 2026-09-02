@@ -11,11 +11,35 @@ DEFAULT_PATH = Path("/etc/bambu-drain/config.toml")
 
 @dataclass(frozen=True)
 class Rule:
-    """One kind of file the printer leaves behind."""
+    """One kind of file the printer leaves behind.
+
+    `group="print"` files are filed under `prints/<session>/<dest>/`, where the
+    session groups everything from one print run. Everything else keeps the
+    dated `<dest>/YYYY/MM/` layout — a sliced model or a firmware image does not
+    belong to a print.
+
+    `rename` replaces the filename outright. Used for the single assembled
+    timelapse, which is more useful as `timelapse.mp4` inside a print folder
+    that is already named for its date than as `video_<ts>.mp4`.
+    """
 
     glob: str
     dest: str
     delete: bool = True
+    group: str = ""
+    rename: str = ""
+    # The printer writes this file exactly once, when a print ends — so it
+    # CLOSES the session, and the next file starts a new one regardless of gap.
+    #
+    # This is not a refinement, it is the only thing that works. A failed print
+    # and its redo were separated by 26 minutes, while gaps WITHIN a print run
+    # to 18. Splitting on time alone would need a ~22 minute threshold, four
+    # minutes above normal, which would fragment any print with a slow layer.
+    ends_session: bool = False
+
+    def __post_init__(self) -> None:
+        if self.group not in ("", "print"):
+            raise ValueError(f"rule.group must be empty or 'print', got {self.group!r}")
 
 
 @dataclass(frozen=True)
@@ -54,6 +78,20 @@ class DrainConfig:
     # one pass instead of a dozen.
     long_idle_minutes: float = 20.0
     max_eject_seconds_long_idle: float = 900.0
+    # Files this far apart belong to different prints. Measured: segments
+    # within one print land 9-18 minutes apart, and consecutive prints were 805
+    # minutes apart. Anything in the 30-60 range separates them cleanly.
+    #
+    # This IS a heuristic. Nothing in the filenames identifies the job — no
+    # print id, no model name — so two prints started inside this window merge
+    # into one folder. The printer does not tell the USB drive what it is
+    # recording, and no amount of parsing recovers that.
+    # The fallback when no session-closing file appears. Deliberately generous:
+    # fragmenting one print across two folders is worse than merging two, and
+    # `ends_session` handles the common case exactly. A print that produces NO
+    # timelapse, followed soon after by another, will still merge — that is a
+    # real limit, not an oversight.
+    session_gap_minutes: float = 45.0
     rules: tuple[Rule, ...] = ()
 
 

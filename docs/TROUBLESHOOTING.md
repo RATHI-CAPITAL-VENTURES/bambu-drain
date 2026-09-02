@@ -143,6 +143,34 @@ vcgencmd get_throttled
 
 ---
 
+## A print produced chamber video but no timelapse
+
+Check the archive: if `prints/<session>/` has a full `video/` folder and no
+`timelapse.mp4`, the printer never wrote one. Nothing was lost in transit —
+confirm with `sudo bambu-drain status`, and check the stick is empty.
+
+Two causes, and the difference matters:
+
+1. **The per-job timelapse setting was off.** It is per-job in Bambu Studio, so
+   re-slicing and re-sending a failed print can silently drop it.
+2. **The save location reverted to Internal.** Check Handy: Device > Timelapse >
+   Internal Storage. If the missing timelapse is there, the External setting is
+   not sticky — and this project will keep missing them until it is fixed. See
+   [SETUP Part 6](SETUP.md#part-6--configure-the-printer).
+
+## The Mac was reachable and now is not: "no route to host"
+
+The Pi's mDNS cache went stale after the Mac's DHCP lease moved. It looks like
+the Mac is down; it is not.
+
+```sh
+ssh rpi 'getent hosts <your-mac>.local'   # compare against the Mac's real IP
+ssh rpi 'sudo systemctl restart avahi-daemon'
+```
+
+Using the `.local` name rather than an IP is still correct — the address moved
+three times during this project's first two days. The cache just needs a nudge.
+
 ## Under-voltage
 
 ```sh
