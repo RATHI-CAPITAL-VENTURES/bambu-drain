@@ -59,6 +59,14 @@ def cmd_drain(args) -> int:
         except Exception:
             logging.exception("drain pass failed")
             ledger.event("drain_error", "see journal")
+        # Refresh the status file every pass. It used to be written only when a
+        # human ran `status`, which made it useless as a health signal — the
+        # timestamp reflected the last time someone looked, not the last time
+        # the loop ran.
+        try:
+            health.write(cfg, health.snapshot(cfg, ledger, gadget, drainer))
+        except Exception:
+            logging.exception("could not write status file")
         time.sleep(cfg.drain.poll_seconds)
 
 
@@ -72,6 +80,7 @@ def cmd_ship(args) -> int:
         try:
             shipper.run_once()
             shipper.prune_remote()
+            shipper.push_status(cfg.health.status_file)
         except Exception:
             logging.exception("ship pass failed")
             ledger.event("ship_error", "see journal")
@@ -82,6 +91,9 @@ def cmd_status(args) -> int:
     cfg, ledger, gadget, drainer, _ = _wire(args)
     payload = health.snapshot(cfg, ledger, gadget, drainer)
     health.write(cfg, payload)
+    if getattr(args, "verdict", False):
+        print(payload["verdict"])
+        return 0 if payload["ok"] else 1
     if args.json:
         print(json.dumps(payload, indent=2))
         return 0
@@ -96,6 +108,7 @@ def cmd_status(args) -> int:
     print(f"archived    {a['files_total']} files, {a['bytes_total'] / 1024**3:.2f} GB")
     print(f"pending     {a['files_pending_ship']} files, "
           f"{a['bytes_pending_ship'] / 1024**3:.2f} GB not yet on the Mac")
+    print(f"health      {payload['verdict']}")
     return 0
 
 
@@ -162,6 +175,9 @@ def main(argv=None) -> int:
 
     st = sub.add_parser("status", help="what is happening right now")
     st.add_argument("--json", action="store_true")
+    st.add_argument("--verdict", action="store_true",
+                    help="print one line: 'ok', or 'PROBLEM: ...'. Stable when "
+                         "healthy, so it works as a change-detector for a watch.")
     st.set_defaults(func=cmd_status)
 
     doc = sub.add_parser("doctor", help="check the setup, in the order it breaks")

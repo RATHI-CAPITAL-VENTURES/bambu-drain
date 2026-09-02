@@ -64,6 +64,11 @@ class ShipConfig:
 @dataclass(frozen=True)
 class HealthConfig:
     status_file: Path = Path("/srv/bambu-drain/status.json")
+    # Where to push the status file on the ship host. RIA runs on the Mac and
+    # cannot reach the Pi — macOS Local Network Privacy blocks her launchd
+    # server from the LAN, the same thing that broke the lamp and Radarr. So
+    # the Pi pushes and RIA only ever reads a local file.
+    remote_status_path: str = "~/.bambu-drain/status.json"
 
 
 @dataclass(frozen=True)

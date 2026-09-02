@@ -9,9 +9,14 @@ echo "· installing package to /opt/bambu-drain"
 mkdir -p /opt/bambu-drain
 cp -r "$SRC/bambu_drain" /opt/bambu-drain/
 
+# The wrapper must set PYTHONPATH ITSELF. /etc/default/bambu-drain is only read
+# by systemd's EnvironmentFile, so relying on it made `sudo bambu-drain status`
+# — the command every doc in this repo tells you to run — fail with
+# "No module named bambu_drain". Documented for a week, never executed once.
 cat > /usr/local/bin/bambu-drain <<'SH'
 #!/bin/sh
-exec python3 -m bambu_drain "$@"
+exec env PYTHONPATH="${PYTHONPATH:+$PYTHONPATH:}/opt/bambu-drain" \
+     python3 -m bambu_drain "$@"
 SH
 chmod +x /usr/local/bin/bambu-drain
 echo 'PYTHONPATH=/opt/bambu-drain' > /etc/default/bambu-drain
