@@ -268,14 +268,19 @@ Observed on a real print, which is the only way this was ever going to be
 accurate:
 
 ```
-/ipcam/ipcam-record.<ts>.N.mp4      chamber camera recording — 190 MB for a short print
+/ipcam/ipcam-record.<ts>.N.mp4      chamber camera — SEGMENTED, see below
 /ipcam/thumbnail/<same>.jpg
 /ipcam/index/
 /timelapse/video_<ts>.mp4           the assembled timelapse — under 1 MB
 /timelapse/thumbnail/<same>.jpg
 ```
 
-Two recordings per print, not one, and the **big** one is the ipcam record. The
+Two recordings per print, not one, and the **big** one is the ipcam record.
+
+**The ipcam recording is segmented**, which only shows up on a long print. The
+`N` is a segment counter: a 4-hour print produced segments `.3` through `.24`,
+one roughly every **11–14 minutes**, each about **240 MB** — 5.4 GB in total,
+against 190 MB for a short print. Size your staging budget for the long case. The
 first version of `config.example.toml` listed `*.png` for thumbnails; the
 printer writes **`.jpg`**. Those would have accumulated forever, which defeats
 the entire premise. `*.jpg`/`*.jpeg` are now rules.
@@ -284,13 +289,41 @@ the entire premise. `*.jpg`/`*.jpeg` are now rules.
 
 ### The idle gate, measured
 
-During a print the P2S writes to the stick every **1–8 seconds**. The idle gate
-is 5 minutes, roughly a 40× margin, so it cannot fire mid-print. Confirmed over
-18 consecutive samples: the gate read `printer active` for the entire print,
-then opened 319 seconds after the last write and drained immediately.
+On a short print the P2S writes to the stick every **1–8 seconds**, and the gate
+read `printer active` for its whole duration, opening 319 seconds after the last
+write.
 
-That margin is the whole reason a purely local signal is sufficient. No MQTT, no
-LAN mode, no cloud — just the backing file's mtime.
+**Do not generalise from that.** Timelapse capture is per layer, so the interval
+depends entirely on the print — a large, slow model writes far less often than a
+small fast one. The claim that survives is the stronger one anyway: on a
+**4-hour print the gate held for the entire run**, with zero drain or eject
+events between the first layer and the last. That is the evidence the design
+rests on, not a cadence figure from one unrepresentative sample.
+
+The signal is purely local — the backing file's mtime. No MQTT, no LAN mode, no
+cloud.
+
+### Our own writes look exactly like the printer's
+
+The flaw that followed from that, found by a 4-hour print: **deleting files off
+the stick updates the backing image's mtime**, which is the same signal used to
+detect the printer writing. So every drain pass reset its own idle clock.
+
+That is invisible on a small drain and awful on a large one. The print left
+5.4 GB across 22 segments; `max_eject_seconds` truncated each pass at 120
+seconds, and the next chunk then waited the full 5-minute gate again because the
+clock had been reset by our own deletions. Four passes, ~25 minutes, the medium
+ejected and re-inserted eight times.
+
+Two fixes, both in `drain.py`:
+
+- `quiet_seconds()` remembers the mtime our own pass caused and the printer's
+  from before it, and looks through the former. A real printer write still moves
+  the clock; ours does not.
+- `eject_budget()` scales the window with confidence. Five minutes of quiet is
+  the minimum bar for believing a print ended; twenty is near certainty. Below
+  `long_idle_minutes` the budget stays at the conservative 120 s; above it, 900 s
+  — enough for a multi-gigabyte backlog in one pass.
 
 ### The printer's clock is not yours
 

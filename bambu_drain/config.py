@@ -49,6 +49,11 @@ class DrainConfig:
     staging: Path = Path("/srv/bambu-drain/staging")
     staging_max_gb: float = 64.0
     max_eject_seconds: float = 120.0
+    # Once the printer has been quiet this long it is not mid-print, it is
+    # done — so a longer ejected window is cheap and a big backlog can drain in
+    # one pass instead of a dozen.
+    long_idle_minutes: float = 20.0
+    max_eject_seconds_long_idle: float = 900.0
     rules: tuple[Rule, ...] = ()
 
 
