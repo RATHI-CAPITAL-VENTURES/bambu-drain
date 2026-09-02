@@ -27,9 +27,25 @@ from .ledger import Ledger
 log = logging.getLogger("bambu_drain.drain")
 
 
-def dest_relpath(rule, src: Path, when: float) -> str:
+def session_name(when: float) -> str:
+    """A print session's folder name, from the first file that opened it."""
+    return f"{datetime.fromtimestamp(when):%Y-%m-%d_%H%M}"
+
+
+def dest_relpath(rule, src: Path, when: float, session: str | None = None) -> str:
+    """Where a file lands in the archive.
+
+    Per-print files go under `prints/<session>/<dest>/`, so everything from one
+    run sits together — 22 video segments, their thumbnails and the assembled
+    timelapse. Everything else keeps the dated layout, because a sliced model or
+    a firmware image does not belong to a print.
+    """
+    name = rule.rename or src.name
+    if rule.group == "print" and session:
+        parts = ["prints", session] + ([rule.dest] if rule.dest else []) + [name]
+        return "/".join(parts)
     d = datetime.fromtimestamp(when, tz=timezone.utc)
-    return f"{rule.dest}/{d:%Y}/{d:%m}/{src.name}"
+    return f"{rule.dest}/{d:%Y}/{d:%m}/{name}"
 
 
 def fsync_file_and_parent(path: Path) -> None:
@@ -61,6 +77,23 @@ def fsync_file_and_parent(path: Path) -> None:
         os.fsync(dfd)
     finally:
         os.close(dfd)
+
+
+def _distinct(name: str, previous: str | None) -> str:
+    """A session name that cannot collide with the one it follows."""
+    if previous is None:
+        return name
+    # Compare against the previous name's BASE, not its suffixed form: after
+    # "…_0927-2" exists, plain "…_0927" is still taken by the session that
+    # forced the suffix in the first place.
+    base, _, n = previous.rpartition("-")
+    if base and n.isdigit():
+        prev_base, prev_n = base, int(n)
+    else:
+        prev_base, prev_n = previous, 1
+    if name != prev_base:
+        return name
+    return f"{name}-{prev_n + 1}"
 
 
 def _unique(path: Path, sha: str) -> Path:
@@ -136,6 +169,25 @@ class Drainer:
             )
         return None
 
+    def session_for(self, mtime: float) -> str:
+        """Which print run a file belongs to, by gap from the previous one.
+
+        There is no print id anywhere in the filenames, so this is a heuristic —
+        see `session_gap_minutes`. It holds up because the measured separation is
+        not close: 9-18 minutes within a print, 805 minutes between them.
+        """
+        gap = self.cfg.drain.session_gap_minutes * 60
+        last = self.ledger.last_print_file()
+        if last and last["src_mtime"] is not None:
+            if not last["ends_session"] and abs(mtime - last["src_mtime"]) <= gap:
+                return last["session"]
+            # Either a timelapse closed that print, or the gap is too large.
+            # Session names are minute-granular for readability, so a genuinely
+            # new session starting inside the same minute would silently reuse
+            # the previous folder. Rare, but a collision is a merged print.
+            return _distinct(session_name(mtime), last["session"])
+        return session_name(mtime)
+
     def _ensure_medium_present(self) -> None:
         try:
             present = self.gadget.media_present
@@ -196,9 +248,15 @@ class Drainer:
         self.gadget.cycle_out()
         try:
             with imagefs.mounted(self.cfg.gadget.image, d.mount_point, self.cfg.gadget.fs) as mp:
-                for src, rule, st in imagefs.candidates(
-                    mp, d.rules, d.min_file_age_minutes * 60
-                ):
+                # Sorted by mtime, not by path: session boundaries are decided
+                # chronologically, and a backlog is drained all at once long
+                # after the fact.
+                found = sorted(
+                    imagefs.candidates(mp, d.rules, d.min_file_age_minutes * 60),
+                    # Closers last within the same second — see ledger ordering.
+                    key=lambda t: (t[2].st_mtime, 1 if t[1].ends_session else 0),
+                )
+                for src, rule, st in found:
                     if time.monotonic() - started > budget:
                         # Hand the medium back and finish next pass. A printer
                         # with its stick back beats a complete drain.
@@ -214,7 +272,8 @@ class Drainer:
                             src.unlink(missing_ok=True)
                         continue
 
-                    rel = dest_relpath(rule, src, st.st_mtime)
+                    session = self.session_for(st.st_mtime) if rule.group == "print" else None
+                    rel = dest_relpath(rule, src, st.st_mtime, session)
                     target = _unique(d.staging / rel, sha)
 
                     if dry_run:
@@ -239,7 +298,9 @@ class Drainer:
                         continue
 
                     self.ledger.record_drained(
-                        sha, src.name, str(target.relative_to(d.staging)), st.st_size, target
+                        sha, src.name, str(target.relative_to(d.staging)), st.st_size,
+                        target, session=session, src_mtime=st.st_mtime,
+                        ends_session=rule.ends_session,
                     )
                     if rule.delete:
                         src.unlink(missing_ok=True)

@@ -332,6 +332,64 @@ Files came back named `2026-09-02_07-48-39` from a print that ran at
 file's mtime, so this only affects the printer's own filenames, but do not trust
 those timestamps when looking for a specific print.
 
+## Grouping by print
+
+The archive is one folder per print:
+
+```
+prints/2026-09-02_0945/
+  timelapse.mp4
+  video/       22 chamber segments, 5.06 GB
+  thumbnails/
+models/2026/09/     sliced models keep the dated layout — they belong to no print
+```
+
+**Nothing the printer writes identifies the job.** No print id, no model name, no
+session marker — only filenames and mtimes. So sessions are inferred, and the
+inference has exactly one reliable signal.
+
+### The timelapse ends a session; the gap is only a fallback
+
+`/timelapse/video_<ts>.mp4` is written **once, when a print ends**. That is the
+boundary. It is marked `ends_session = true` in the rule table, and the next file
+after it opens a new session regardless of timing.
+
+Time alone cannot do this job, and the data says so plainly. A failed print and
+the redo that replaced it were **26 minutes** apart, while gaps *within* a single
+print reach **18 minutes**. Splitting on time would need a ~22-minute threshold —
+four minutes above normal — and any print with a slow layer would fragment across
+two folders. The first version of this feature used a 45-minute gap and duly
+merged the failed print with its redo, putting a 0.1 MB timelapse from a
+cancelled job at the root of a 4-hour print that had none of its own.
+
+`session_gap_minutes` remains as the fallback for prints that produce no
+timelapse, and stays generous (45) on purpose: merging two prints is a nuisance,
+fragmenting one is worse.
+
+**The known limit, stated rather than hidden:** a print that produces no
+timelapse, followed soon after by another, will merge. Nothing in the data
+distinguishes them.
+
+### Two ordering details that matter
+
+- **Ties put the closer last.** The truncated final segment and the timelapse are
+  flushed in the same second. If the closer sorted first, that segment would open
+  a new session and end up alone in its own folder.
+- **Candidates are drained in mtime order**, not path order, because session
+  boundaries are chronological and a backlog is drained all at once long after
+  the fact.
+
+### Session names
+
+`YYYY-MM-DD_HHMM`, from the first file that opened the session — and taken from
+the **mtime**, not the filename. The P2S's clock is ~12 hours off, so its
+filenames say `21-13` for a print that ran at `09:13`. The folder names are
+right; the names inside them are not.
+
+Minute granularity means two sessions starting in the same minute would collide,
+so `_distinct()` suffixes `-2`, `-3`. Unlikely, but a collision silently merges
+two prints, which is the thing this whole section exists to prevent.
+
 ## Known gaps
 
 - **The 4 GB question is open.** exFAT is the default and has no per-file limit.

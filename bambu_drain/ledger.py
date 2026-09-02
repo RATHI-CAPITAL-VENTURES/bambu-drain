@@ -19,6 +19,9 @@ CREATE TABLE IF NOT EXISTS files (
     dest_rel     TEXT NOT NULL,
     size         INTEGER NOT NULL,
     staging_path TEXT,
+    session      TEXT,
+    src_mtime    REAL,
+    ends_session INTEGER DEFAULT 0,
     drained_at   REAL NOT NULL,
     shipped_at   REAL,
     verified_at  REAL
@@ -45,6 +48,12 @@ class Ledger:
         # to a power cut orphans a staged file that nothing will ever ship.
         self.db.execute("PRAGMA synchronous=FULL")
         self.db.executescript(SCHEMA)
+        # Additive migration for ledgers created before print grouping.
+        cols = {r[1] for r in self.db.execute("PRAGMA table_info(files)")}
+        for col, typ in (("session", "TEXT"), ("src_mtime", "REAL"),
+                         ("ends_session", "INTEGER DEFAULT 0")):
+            if col not in cols:
+                self.db.execute(f"ALTER TABLE files ADD COLUMN {col} {typ}")
 
     def close(self) -> None:
         self.db.close()
@@ -56,14 +65,36 @@ class Ledger:
         return cur.fetchone() is not None
 
     def record_drained(
-        self, sha: str, src_name: str, dest_rel: str, size: int, staging_path: Path
+        self, sha: str, src_name: str, dest_rel: str, size: int, staging_path: Path,
+        session: str | None = None, src_mtime: float | None = None,
+        ends_session: bool = False,
     ) -> None:
         self.db.execute(
             "INSERT OR REPLACE INTO files "
-            "(sha256, src_name, dest_rel, size, staging_path, drained_at) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            (sha, src_name, dest_rel, size, str(staging_path), time.time()),
+            "(sha256, src_name, dest_rel, size, staging_path, drained_at, "
+            " session, src_mtime, ends_session) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (sha, src_name, dest_rel, size, str(staging_path), time.time(),
+             session, src_mtime, 1 if ends_session else 0),
         )
+
+    def last_print_file(self) -> sqlite3.Row | None:
+        """The most recent file assigned to a print session, by source mtime.
+
+        Session continuity is decided against this: a new file within the gap
+        joins it, anything later opens a new session. Ordering by src_mtime (the
+        printer's clock for that file) rather than drained_at matters, because a
+        backlog is drained long after the fact and all in one go.
+        """
+        cur = self.db.execute(
+            "SELECT session, src_mtime, ends_session FROM files "
+            "WHERE session IS NOT NULL AND src_mtime IS NOT NULL "
+            # Ties broken so a session CLOSER sorts last: the truncated final
+            # segment and the timelapse are flushed in the same second, and the
+            # closer is by definition the end of the run.
+            "ORDER BY src_mtime DESC, ends_session DESC LIMIT 1"
+        )
+        return cur.fetchone()
 
     # -- ship side ---------------------------------------------------------
 

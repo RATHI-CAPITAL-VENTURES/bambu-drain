@@ -36,19 +36,38 @@ max_eject_seconds_long_idle = 900
 
 # --- what to drain -----------------------------------------------------------
 # A registry, not branches. One row per kind of file the printer leaves behind.
-# Order matters only for `dest`: the first matching rule wins.
+# ORDER MATTERS: the first matching rule wins, so put specific globs first.
+#
+# `group = "print"` files land in prints/<session>/<dest>/, grouping everything
+# from one run together. Files without it keep the dated <dest>/YYYY/MM/ layout,
+# because a sliced model does not belong to any single print.
 
-# Two distinct recordings per print on the P2S:
-#   /ipcam/ipcam-record.<ts>.N.mp4   the chamber camera recording (the big one)
-#   /timelapse/video_<ts>.mp4        the assembled timelapse
+# The assembled timelapse — one per print, and the thing you actually want to
+# watch. Renamed, because the folder is already named for its date. MUST come
+# before the generic *.mp4 rule below.
+[[rule]]
+glob   = "timelapse/video_*.mp4"
+group  = "print"
+dest   = ""                              # the print folder root
+rename = "timelapse.mp4"
+# Written once, when a print ends — so it closes the session. Without this a
+# failed print and its redo end up in one folder; they were only 26 minutes
+# apart, and gaps within a print reach 18.
+ends_session = true
+delete = true
+
+# The chamber camera recording. SEGMENTED: ~240 MB every 11-14 minutes, so a
+# 4-hour print produces 22 of these and 5.4 GB.
 [[rule]]
 glob   = "**/*.mp4"
-dest   = "timelapse"
+group  = "print"
+dest   = "video"
 delete = true
 
 [[rule]]
 glob   = "**/*.avi"
-dest   = "timelapse"
+group  = "print"
+dest   = "video"
 delete = true
 
 [[rule]]
@@ -67,16 +86,19 @@ delete = true
 # forever, which defeats the entire point.
 [[rule]]
 glob   = "**/*.jpg"
+group  = "print"
 dest   = "thumbnails"
 delete = true
 
 [[rule]]
 glob   = "**/*.jpeg"
+group  = "print"
 dest   = "thumbnails"
 delete = true
 
 [[rule]]
 glob   = "**/*.png"
+group  = "print"
 dest   = "thumbnails"
 delete = true
 
@@ -89,7 +111,10 @@ delete = false
 
 [ship]
 host          = "ishan-mac"              # an ssh alias in the Pi's ~/.ssh/config
-dest          = "~/Library/Mobile Documents/com~apple~CloudDocs/BambuArchive"
+# The archive root. The LAST component is just a folder name — pick whatever you
+# want to see in Finder; nothing depends on it. Point it inside iCloud Drive to
+# get the archive on your phone, or anywhere else for a purely local copy.
+dest          = "~/Library/Mobile Documents/com~apple~CloudDocs/My3dPrints"
 # Must match the Pi's real user — Raspberry Pi OS no longer defaults to "pi".
 ssh_key       = "/home/rpi/.ssh/id_ed25519"
 poll_seconds  = 300
