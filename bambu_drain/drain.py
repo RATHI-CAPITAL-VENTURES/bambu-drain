@@ -81,13 +81,47 @@ class Drainer:
         self.cfg = cfg
         self.ledger = ledger
         self.gadget = gadget
+        # OUR OWN deletions bump the backing image's mtime — the very signal we
+        # use to detect the printer writing. So without this, every pass resets
+        # its own idle clock, and draining a backlog too big for one window
+        # means waiting the full idle gate again between each chunk. A 4-hour
+        # print left 5.4 GB and took four passes over ~25 minutes for that
+        # reason. We remember the mtime we caused and look through it.
+        self._own_mtime: float | None = None
+        self._printer_mtime: float | None = None
 
     # -- gating ------------------------------------------------------------
+
+    def quiet_seconds(self) -> float:
+        """How long since the PRINTER last wrote, ignoring our own writes."""
+        try:
+            current = self.gadget.last_host_write()
+        except OSError:
+            return 0.0
+        if (self._own_mtime is not None
+                and abs(current - self._own_mtime) < 0.001
+                and self._printer_mtime is not None):
+            # Nothing has touched the image since our own pass finished.
+            current = self._printer_mtime
+        return max(0.0, time.time() - current)
+
+    def eject_budget(self) -> float:
+        """How long we may hold the medium, scaled by confidence.
+
+        Five minutes of quiet is the minimum bar for believing a print ended;
+        twenty is near certainty. The budget follows that confidence, so the
+        common case (a small drain right after a print) stays conservative
+        while a large backlog does not get chopped into a dozen windows.
+        """
+        d = self.cfg.drain
+        if self.quiet_seconds() >= d.long_idle_minutes * 60:
+            return d.max_eject_seconds_long_idle
+        return d.max_eject_seconds
 
     def blocked_reason(self) -> str | None:
         """Why we must not drain right now, or None if we may."""
         d = self.cfg.drain
-        idle = self.gadget.idle_seconds()
+        idle = self.quiet_seconds()
         if idle < d.idle_minutes * 60:
             return f"printer active ({idle:.0f}s since last write)"
 
@@ -149,9 +183,15 @@ class Drainer:
 
         d = self.cfg.drain
         started = time.monotonic()
+        budget = self.eject_budget()
         moved = 0
         total = 0
         truncated = False
+
+        try:
+            pre_mtime = self.cfg.gadget.image.stat().st_mtime
+        except OSError:
+            pre_mtime = time.time()
 
         self.gadget.cycle_out()
         try:
@@ -159,7 +199,7 @@ class Drainer:
                 for src, rule, st in imagefs.candidates(
                     mp, d.rules, d.min_file_age_minutes * 60
                 ):
-                    if time.monotonic() - started > d.max_eject_seconds:
+                    if time.monotonic() - started > budget:
                         # Hand the medium back and finish next pass. A printer
                         # with its stick back beats a complete drain.
                         truncated = True
@@ -211,6 +251,14 @@ class Drainer:
             # Unconditional. If the mount or the copy blew up, the printer still
             # gets its stick back.
             self.gadget.cycle_in()
+            # Record the mtime our own deletions caused, and what the printer's
+            # was before we touched it, so the next pass does not mistake our
+            # writes for the printer waking up.
+            try:
+                self._printer_mtime = pre_mtime
+                self._own_mtime = self.cfg.gadget.image.stat().st_mtime
+            except OSError:
+                self._own_mtime = None
 
         if moved:
             self.ledger.event("drain", f"{moved} files, {total} bytes")
@@ -219,5 +267,6 @@ class Drainer:
             "moved": moved,
             "bytes": total,
             "truncated": truncated,
+            "budget_seconds": budget,
             "seconds": time.monotonic() - started,
         }

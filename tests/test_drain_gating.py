@@ -1,3 +1,4 @@
+import time
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -8,11 +9,29 @@ from bambu_drain.ledger import Ledger
 
 
 class FakeGadget:
+    """Models the real primitive: the backing image's mtime.
+
+    `quiet_seconds()` derives idleness from this and must additionally discount
+    writes the drainer itself caused, so the fake exposes the mtime rather than
+    a pre-computed idle figure.
+    """
+
+    media_present = True
+
     def __init__(self, idle):
         self._idle = idle
 
+    def last_host_write(self):
+        return time.time() - self._idle
+
     def idle_seconds(self):
         return self._idle
+
+    def cycle_out(self, settle_seconds=1.0):
+        pass
+
+    def cycle_in(self):
+        pass
 
 
 def make_cfg(tmp: Path, staging_max_gb=64.0, idle_minutes=5.0):

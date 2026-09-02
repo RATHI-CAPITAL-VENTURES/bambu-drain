@@ -29,6 +29,9 @@ class FakeGadget:
         self.cycled_out = 0
         self.cycled_in = 0
 
+    def last_host_write(self):
+        return time.time() - self._idle
+
     def idle_seconds(self):
         return self._idle
 
