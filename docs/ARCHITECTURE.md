@@ -332,6 +332,41 @@ Files came back named `2026-09-02_07-48-39` from a print that ran at
 file's mtime, so this only affects the printer's own filenames, but do not trust
 those timestamps when looking for a specific print.
 
+## The timelapse may not reach the USB drive at all
+
+Observed, and it changes what this project can promise:
+
+| print | chamber video (USB) | assembled timelapse |
+|---|---|---|
+| short (12 min) | yes | on the USB drive |
+| short (18 min, failed) | yes | on the USB drive |
+| **long (4.6 h)** | **yes, 22 segments, 5.06 GB** | **internal storage only** |
+
+The chamber recording reliably lands on the drive. The assembled timelapse does
+not always — for the long print it was written to the printer's internal
+storage, where nothing here can reach it. Whether that is a duration threshold,
+a setting that did not persist, or something else is **not established**; we have
+three prints and two behaviours.
+
+The practical consequence is that `prints/<session>/timelapse.mp4` can be absent
+for a print that completed perfectly well, and its absence says nothing about
+whether the drain worked.
+
+### Reconstructing one from the chamber footage
+
+`tools/make_timelapse.py` builds a timelapse from the segments instead. The raw
+material is far better than it sounds: 1920x1080 at 30 fps, 750 s per segment,
+so a 4.6-hour print is ~495,000 frames. Sampling one frame per ~9 seconds of
+print gives a 60-second clip.
+
+The per-segment thumbnails are **not** an alternative, which is worth stating
+because it is the first idea anyone has: there is one thumbnail per segment, so a
+4-hour print yields 22 stills — under a second of video.
+
+The output is named `timelapse-reconstructed.mp4`, never `timelapse.mp4`. One is
+what the printer made and the other is what we assembled, and an archive that
+blurs the two lies about its own provenance.
+
 ## Grouping by print
 
 The archive is one folder per print:
