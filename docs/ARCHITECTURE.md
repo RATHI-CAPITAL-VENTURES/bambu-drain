@@ -262,6 +262,43 @@ unreachable — which reads like a network fault. The alias belongs in
 Related: point it at the Mac's mDNS `.local` name, not its IP. The Mac's
 address moved during this project's own setup.
 
+## What the P2S actually writes
+
+Observed on a real print, which is the only way this was ever going to be
+accurate:
+
+```
+/ipcam/ipcam-record.<ts>.N.mp4      chamber camera recording — 190 MB for a short print
+/ipcam/thumbnail/<same>.jpg
+/ipcam/index/
+/timelapse/video_<ts>.mp4           the assembled timelapse — under 1 MB
+/timelapse/thumbnail/<same>.jpg
+```
+
+Two recordings per print, not one, and the **big** one is the ipcam record. The
+first version of `config.example.toml` listed `*.png` for thumbnails; the
+printer writes **`.jpg`**. Those would have accumulated forever, which defeats
+the entire premise. `*.jpg`/`*.jpeg` are now rules.
+
+`/ipcam/index/` is left alone — the printer maintains it, and it is small.
+
+### The idle gate, measured
+
+During a print the P2S writes to the stick every **1–8 seconds**. The idle gate
+is 5 minutes, roughly a 40× margin, so it cannot fire mid-print. Confirmed over
+18 consecutive samples: the gate read `printer active` for the entire print,
+then opened 319 seconds after the last write and drained immediately.
+
+That margin is the whole reason a purely local signal is sufficient. No MQTT, no
+LAN mode, no cloud — just the backing file's mtime.
+
+### The printer's clock is not yours
+
+Files came back named `2026-09-02_07-48-39` from a print that ran at
+`2026-09-01 20:00` local. The P2S clock was ~12 hours off. Archive paths use the
+file's mtime, so this only affects the printer's own filenames, but do not trust
+those timestamps when looking for a specific print.
+
 ## Known gaps
 
 - **The 4 GB question is open.** exFAT is the default and has no per-file limit.

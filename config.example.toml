@@ -32,6 +32,9 @@ max_eject_seconds    = 120
 # A registry, not branches. One row per kind of file the printer leaves behind.
 # Order matters only for `dest`: the first matching rule wins.
 
+# Two distinct recordings per print on the P2S:
+#   /ipcam/ipcam-record.<ts>.N.mp4   the chamber camera recording (the big one)
+#   /timelapse/video_<ts>.mp4        the assembled timelapse
 [[rule]]
 glob   = "**/*.mp4"
 dest   = "timelapse"
@@ -50,6 +53,20 @@ delete = true
 [[rule]]
 glob   = "**/*.gcode"
 dest   = "models"
+delete = true
+
+# The P2S writes JPEG thumbnails alongside every recording, in
+# /ipcam/thumbnail/ and /timelapse/thumbnail/. Observed on real hardware — the
+# first version of this file only listed *.png and would have accumulated them
+# forever, which defeats the entire point.
+[[rule]]
+glob   = "**/*.jpg"
+dest   = "thumbnails"
+delete = true
+
+[[rule]]
+glob   = "**/*.jpeg"
+dest   = "thumbnails"
 delete = true
 
 [[rule]]

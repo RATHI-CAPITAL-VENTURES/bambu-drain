@@ -31,6 +31,9 @@ stick and drains it continuously. See `docs/retros/0.2.0.md`.
 
 ### Fixed
 
+- **Thumbnails were never drained.** The rules listed `*.png`; the P2S writes
+  `.jpg` into `/ipcam/thumbnail/` and `/timelapse/thumbnail/`. They would have
+  accumulated forever. Found by running a real print.
 - **The medium could be left out, and the printer says nothing useful.** If a
   pass died between eject and insert, the printer was left looking at a card
   reader with no card — it reports "no USB drive", which is indistinguishable
