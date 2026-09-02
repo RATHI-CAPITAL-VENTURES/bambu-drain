@@ -12,7 +12,7 @@ import logging
 import shlex
 import subprocess
 import time
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from .ledger import Ledger
 from .lock import AlreadyRunning, single_instance
@@ -43,6 +43,15 @@ def remote_abs(dest: str, rel: str, home: str) -> str:
         dest = f"{home.rstrip('/')}/{dest[2:]}"
     base = dest.rstrip("/")
     return f"{base}/{rel}" if rel else base
+
+
+def _home_arg(path: str) -> str:
+    """Quote for a remote shell while leaving a leading ~ expandable."""
+    if path == "~":
+        return "~"
+    if path.startswith("~/"):
+        return "~/" + shlex.quote(path[2:])
+    return shlex.quote(path)
 
 
 def shell_arg(path: str) -> str:
@@ -179,6 +188,32 @@ class Shipper:
         if shipped:
             self.ledger.event("ship", f"{shipped} files, {total} bytes")
         return {"shipped": shipped, "bytes": total, "pending": len(pending) - shipped}
+
+    def push_status(self, local: Path) -> bool:
+        """Copy the status file to the Mac so RIA can read it locally.
+
+        Best-effort and deliberately quiet: if the Mac is away this fails every
+        cycle and that is not news. The staleness of the file IS the signal —
+        RIA alerts on a status that has stopped being updated, which covers the
+        Pi being dead, the network being down, and this push failing, without
+        needing any of them to report themselves.
+        """
+        if not local.exists():
+            return False
+        remote = self.cfg.health.remote_status_path
+        parent = str(PurePosixPath(remote).parent)
+        if self._ssh(f"mkdir -p {_home_arg(parent)}").returncode != 0:
+            return False
+        proc = subprocess.run(
+            [
+                "rsync", "-a",
+                "-e", f"ssh -i {self.cfg.ship.ssh_key} -o BatchMode=yes -o ConnectTimeout=10",
+                str(local),
+                f"{self.cfg.ship.host}:{remote}",
+            ],
+            capture_output=True, text=True,
+        )
+        return proc.returncode == 0
 
     def prune_remote(self) -> int:
         """Apply retention_days on the Mac. 0 means keep forever."""
