@@ -9,9 +9,13 @@ BASE ?= origin/main
 test:
 	$(PY) -m unittest discover -s tests -t . -v
 
+# PR_TITLE is passed through so the pr-title guard actually runs locally.
+# Without it the guard prints "skipping" and is green here while failing in CI —
+# which is how this PR got to merge time with a bad title.
 guards:
 	BASE_SHA=$$(git merge-base HEAD $(BASE)) \
 	HEAD_SHA=$$(git rev-parse HEAD) \
+	PR_TITLE="$$(gh pr view --json title -q .title 2>/dev/null)" \
 	bash .github/scripts/guards.sh all
 
 # Move every closed minor series out of CHANGELOG.md into docs/changelog/<X.Y>.md,

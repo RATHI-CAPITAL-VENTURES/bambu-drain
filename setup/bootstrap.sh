@@ -11,7 +11,6 @@
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
-REPO="$(dirname "$HERE")"
 SIZE_GB="${SIZE_GB:-32}"
 FS="${FS:-exfat}"
 

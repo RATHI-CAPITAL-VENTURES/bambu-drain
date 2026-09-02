@@ -44,7 +44,7 @@ scan_dwc2() {  # $1: "effective" | "inert"
 inert=$(scan_dwc2 inert)
 if [ -n "$inert" ]; then
   echo "· config.txt: ignoring dwc2 lines in sections that do not apply here:"
-  echo "$inert" | sed 's/^/    /'
+  while IFS= read -r line; do echo "    $line"; done <<< "$inert"
 fi
 
 effective=$(scan_dwc2 effective)
@@ -56,7 +56,7 @@ elif printf '%s' "$effective" | grep -q 'dr_mode=peripheral'; then
   echo "· config.txt: dwc2 already effective in peripheral mode"
 else
   echo "· config.txt: effective dwc2 line has the wrong dr_mode, rewriting:"
-  echo "$effective" | sed 's/^/    was: /'
+  while IFS= read -r line; do echo "    was: $line"; done <<< "$effective"
   line=${effective%%:*}
   sed -i "${line}s|.*|dtoverlay=dwc2,dr_mode=peripheral|" "$CONFIG"
   echo "    now: dtoverlay=dwc2,dr_mode=peripheral"
