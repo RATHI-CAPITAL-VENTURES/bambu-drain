@@ -4,6 +4,22 @@
 header equals `VERSION`, is new relative to the base branch, and increases
 monotonically. A MINOR bump is a milestone and must ship a retro.
 
+## 0.3.1 — 2026-09-01
+
+### Added
+
+- **MIT licence.** Without one, "open source" is not legally open — default
+  copyright means nobody may use it.
+- A scope note in the README: this was built and run against a P2S, a Pi 4 and
+  macOS, and only that combination has actually been exercised.
+
+### Changed
+
+- Commit history rewritten to remove `claude.ai` session URLs from the four
+  commit messages that carried them. Content is byte-identical (verified by tree
+  hash); only messages changed. Done before publishing, because after the first
+  fork it cannot be.
+
 ## 0.3.0 — 2026-09-01
 
 

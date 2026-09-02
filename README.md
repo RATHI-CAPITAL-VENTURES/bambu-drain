@@ -1,7 +1,12 @@
 # bambu-drain
 
-A Raspberry Pi that pretends to be a USB stick, so the Bambu Lab P2S never
+A Raspberry Pi that pretends to be a USB stick, so a **Bambu Lab P2S** never
 needs its storage cleaned out by hand.
+
+> Built for a P2S + Pi 4 + macOS, and the specifics in these docs reflect that.
+> The approach should carry to any printer that accepts a USB drive and any
+> host that can take an rsync over SSH — but only the setup above has actually
+> been run.
 
 The printer writes timelapses and sliced files to what it believes is an
 ordinary flash drive. It is a backing image on a Pi 4. When the printer goes
@@ -137,3 +142,23 @@ See `config.example.toml`. What to drain is a registry, not a branch — one
 archive folder and `delete` deciding whether the original goes. Firmware images
 are archived but never deleted, because the printer needs them to stay put to
 apply an update.
+
+## Licence
+
+MIT — see [LICENSE](LICENSE).
+
+## A note on the docs
+
+`docs/ARCHITECTURE.md` and the retros under `docs/retros/` record the reasoning
+and the mistakes, including the options that were considered and rejected. They
+name specifics from the machine this was built on — a Mac, an SSH alias, and a
+personal assistant called RIA that consumes the health status. None of that is
+required to run this; it is left in because a design decision is easier to judge
+when you can see the constraint that produced it.
+
+Several of the bugs documented there were found by running the thing rather than
+by reasoning about it — a checksum that verified page-cached data before the
+original was deleted, a `dtoverlay` line that satisfied a grep while doing
+nothing, and an rsync destination that needed the opposite quoting from every
+other path in the same function. If you are building something similar, those
+three are the ones worth reading first.
