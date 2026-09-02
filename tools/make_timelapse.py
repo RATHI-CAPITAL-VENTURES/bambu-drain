@@ -135,8 +135,12 @@ def main() -> int:
         # Sampling straight from the concat input avoids writing a 5 GB
         # intermediate. setpts renumbers the kept frames so they play at a
         # constant rate instead of inheriting the source timestamps.
+        # -stats writes a progress line per half-second with a carriage
+        # return, which is right at a terminal and 80 KB of noise when the
+        # output is piped or captured. Only ask for it when someone is watching.
+        progress = ["-stats"] if sys.stderr.isatty() else ["-nostats"]
         cmd = [
-            "ffmpeg", "-hide_banner", "-loglevel", "error", "-stats",
+            "ffmpeg", "-hide_banner", "-loglevel", "error", *progress,
             "-f", "concat", "-safe", "0", "-i", str(listing),
             "-vf", f"select='not(mod(n\\,{every_nth}))',setpts=N/{args.fps}/TB",
             "-r", str(args.fps), "-c:v", "libx264", "-crf", str(args.crf),
@@ -149,8 +153,11 @@ def main() -> int:
             print("error: ffmpeg failed", file=sys.stderr)
             return 1
 
+    mb = out.stat().st_size / 1024**2
     print(f"\n  done: {out}")
-    print(f"  {out.stat().st_size / 1024**2:.1f} MB")
+    print(f"  {mb:.1f} MB, {actual_frames / args.fps:.0f}s")
+    if mb > 100:
+        print(f"  (large for its length — pass --crf 26 for roughly half the size)")
     return 0
 
 
