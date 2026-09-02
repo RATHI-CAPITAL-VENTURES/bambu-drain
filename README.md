@@ -50,59 +50,57 @@ before the mount, the mount is wrapped in a `finally` that always re-inserts,
 and the eject uses the kernel's `forced_eject` so a printer holding the medium
 open is an error rather than a silent overlap.
 
-## Hardware
+## Setup
 
-A **Pi 4 Model B** or a **Pi Zero 2 W**. Not a Pi 5 — its USB-C is power-only
-and cannot do peripheral mode at all.
+**→ [docs/SETUP.md](docs/SETUP.md)** is the complete build, in order, from a bare
+Pi to a verified working system. It covers the parts that are easy to skip and
+expensive to get wrong:
 
-On a Pi 4 the USB-C port is both the power input and the only port that can act
-as a USB device. Once `setup/01-enable-dwc2.sh` has run, that port is a data
-line to the printer, so:
+- the bill of materials, and why **a Pi 5 will not work** (its USB-C is
+  power-only and cannot do peripheral mode)
+- **power** — the Pi 4's USB-C becomes the data port, so 5 V goes to GPIO pins
+  4 and 6; how to identify them without killing the board, and the supplies that
+  are known not to work
+- **the cable** — most USB-C ↔ USB-A cables are charge-only, which looks
+  identical to a broken setup
+- **SSH in both directions**, including why the alias must be system-wide
+- **configuring the printer** — timelapse must be set to save to *External*, and
+  without it the whole system silently drains an empty drive
 
-- power the Pi from a **5 V / 3 A supply on GPIO pin 2 or 4 (5V) and pin 6 (GND)**
-- use a **VBUS-blocking adapter** on the USB-C line so the printer isn't
-  back-feeding 5 V into an already-powered Pi
-- use a **USB-C → USB-A** cable into the port on top of the printer
+`setup/00-ssh-from-mac.sh` automates the SSH half.
 
-A Pi 4 browning out mid-write is how the backing image gets corrupted.
+**→ [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md)** is organised by symptom,
+because several unrelated causes present identically as "the printer doesn't see
+a USB drive".
 
-## Install
+**→ [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** is the reasoning: why this
+approach over FTPS, the block-level hazard, and the traps found on real hardware.
 
-On the Pi — one privileged entry point, so it is a single sudo prompt:
-
-```sh
-sudo setup/bootstrap.sh prepare       # boot config + image + install
-sudo reboot
-ls /sys/class/udc                     # MUST be non-empty; nothing works otherwise
-
-sudo nano /etc/bambu-drain/config.toml   # set ship.host, ship.dest, ssh_key
-sudo setup/bootstrap.sh verify        # gadget + doctor + dry-run drain
-sudo setup/bootstrap.sh start         # enable and start the three services
-```
-
-The individual `01-`/`02-`/`03-` scripts still exist and are safe to re-run on
-their own; `bootstrap.sh` just sequences them.
-
-### The destination alias must resolve for **root**
-
-The drain loop needs configfs and `mount`, so the services run as root. A
-`Host` block in `~/.ssh/config` belonging to your login user is invisible to
-root, and `doctor` reports the Mac as unreachable — which reads like a network
-fault and is not one. Put it system-wide instead:
+### The short version
 
 ```sh
-sudo tee /etc/ssh/ssh_config.d/10-bambu-drain.conf <<'EOF'
-Host ishan-mac
-  HostName your-mac.local
-  User you
-  IdentityFile /home/rpi/.ssh/id_ed25519
-  IdentitiesOnly yes
-  StrictHostKeyChecking accept-new
-EOF
+# on the Mac
+setup/00-ssh-from-mac.sh rpi ishan-mac
+rsync -a --exclude .git ./ rpi:~/bambu-drain/
+
+# on the Pi
+sudo setup/bootstrap.sh prepare && sudo reboot
+ls /sys/class/udc                       # MUST be non-empty
+sudo nano /etc/bambu-drain/config.toml  # ship.host, ship.dest, ssh_key
+sudo setup/bootstrap.sh verify          # gadget + doctor + dry-run
+sudo setup/bootstrap.sh start
 ```
 
-Use the Mac's **mDNS `.local` name, not its IP** — the IP is a DHCP lease and
-will move. It moved once during this project's own setup.
+Then **set the printer's timelapse save location to External/USB**, or nothing
+will ever reach the drive.
+
+## What runs where
+
+| Machine | What |
+|---|---|
+| **Pi** | three systemd services: the gadget, the drain loop, the ship loop |
+| **Mac** | **nothing.** It is only an SSH + rsync destination — no daemon, no launchd agent |
+| **Printer** | nothing installed; one setting changed |
 
 ## Before you trust it
 

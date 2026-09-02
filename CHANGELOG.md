@@ -4,6 +4,31 @@
 header equals `VERSION`, is new relative to the base branch, and increases
 monotonically. A MINOR bump is a milestone and must ship a retro.
 
+## 0.2.1 — 2026-09-01
+
+Documentation. Everything needed to rebuild this from scratch now lives in the
+repo rather than in the heads of the people who built it. An audit found that
+**none** of the following was written down anywhere: the printer's timelapse
+setting, the SSH setup, passwordless sudo, the GPIO power pins, enabling Remote
+Login on the Mac, checking `get_throttled`, the charge-only cable trap, or
+flashing the Pi.
+
+### Added
+
+- **`docs/SETUP.md`** — the complete build in order: bill of materials, power
+  wiring with the pin identification and the polarity warning, the data-cable
+  requirement, flashing, SSH in both directions, install, connecting to the
+  printer, **configuring the printer** (without which the whole system silently
+  drains an empty drive), and end-to-end verification.
+- **`docs/TROUBLESHOOTING.md`** — organised by symptom, because several
+  unrelated causes present identically as "the printer doesn't see a USB drive".
+  `not attached` vs `configured` separates them in one command.
+- **`setup/00-ssh-from-mac.sh`** — automates the bidirectional SSH setup,
+  including putting the Host alias in `/etc/ssh/ssh_config.d/` where root can
+  see it, and verifying the return path *as root* rather than as the login user.
+- A "what runs where" table making explicit that **nothing runs on the Mac** —
+  it is only an SSH and rsync destination.
+
 ## 0.2.0 — 2026-08-31
 
 The first working implementation: the Pi presents itself to the P2S as a USB
