@@ -14,6 +14,11 @@ monotonically. A MINOR bump is a milestone and must ship a retro.
   rendering **without a word** — an enabled feature that is silently off, which
   is the failure this project keeps rediscovering. `setup/03-install.sh` now
   installs it and `doctor` checks for it whenever `[render] enabled = true`.
+- **The drift-check had itself drifted.** `doctor`'s "a rule closes print
+  sessions" was written before `ends_session_if_short` existed and only tested
+  `ends_session`, so a config relying on short-segment detection alone — the
+  more reliable of the two signals — failed a check whose entire purpose is
+  catching that class of mistake. Found by the test the `tests` guard forced.
 
 ## 0.7.0 — 2026-09-03
 
