@@ -12,6 +12,7 @@ import logging
 import shlex
 import subprocess
 import time
+import time
 from pathlib import Path, PurePosixPath
 
 from .ledger import Ledger
@@ -92,6 +93,18 @@ class Shipper:
         )
 
     def reachable(self) -> bool:
+        """Can we reach the ship host, healing a stale mDNS cache once if not.
+
+        The Mac's DHCP lease moves, and the Pi's avahi cache holds the old
+        address well past it — which surfaces as "no route to host" and reads
+        like the Mac being switched off. Seen three times in two days. Using the
+        `.local` name is still right; the cache just needs a nudge.
+        """
+        if self._ssh("true").returncode == 0:
+            return True
+        subprocess.run(["systemctl", "restart", "avahi-daemon"],
+                       capture_output=True, check=False)
+        time.sleep(2)
         return self._ssh("true").returncode == 0
 
     def run_once(self) -> dict:

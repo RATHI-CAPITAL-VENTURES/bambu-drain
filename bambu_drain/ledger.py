@@ -78,6 +78,24 @@ class Ledger:
              session, src_mtime, 1 if ends_session else 0),
         )
 
+    def modal_size(self, like: str, minimum: int = 5) -> int | None:
+        """The rotation size for a family of files, or None if not yet known.
+
+        Uses the MEDIAN, not the mode. Real segments differ by a few kilobytes —
+        240.2, 240.3, 240.4 MB — so no exact byte count ever repeats and a mode
+        over raw sizes returns nothing. That is not a rounding nicety: the first
+        version of this returned None for 61 perfectly good segments and
+        silently disabled boundary detection entirely.
+
+        The median is robust to the minority of short segments, which is exactly
+        the population being measured against.
+        """
+        sizes = [r["size"] for r in self.db.execute(
+            "SELECT size FROM files WHERE src_name LIKE ? ORDER BY size", (like,))]
+        if len(sizes) < minimum:
+            return None
+        return sizes[len(sizes) // 2]
+
     def last_print_file(self) -> sqlite3.Row | None:
         """The most recent file assigned to a print session, by source mtime.
 

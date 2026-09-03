@@ -383,7 +383,29 @@ models/2026/09/     sliced models keep the dated layout — they belong to no pr
 session marker — only filenames and mtimes. So sessions are inferred, and the
 inference has exactly one reliable signal.
 
-### The timelapse ends a session; the gap is only a fallback
+### A short segment ends a print — the only physical signal
+
+The chamber recording rotates at a **fixed size**. Every full segment is within
+0.1% of every other, so a segment that comes in short was closed early, which
+means the recording stopped, which means the print stopped. Measured over 61
+real segments:
+
+```
+full segments   240.2 - 240.4 MB    (100% of modal, every single one)
+print endings    29.6  72.2  112.2  160.8  190.5  218.5 MB
+                 12%   30%   47%    67%    79%    91%
+nothing at all   between 92% and 99%
+```
+
+The distribution is effectively binary, which is what makes a 95% threshold safe
+rather than tuned. The rotation size is learned from the ledger's median — it is
+a property of the printer, not something to ask the user for, and the median is
+robust to the short segments being measured against.
+
+This is the only boundary signal that is **physical rather than inferential**,
+and the only one that works at all when the timelapse went to internal storage.
+
+### The timelapse also ends a session; the gap is only a fallback
 
 `/timelapse/video_<ts>.mp4` is written **once, when a print ends**. That is the
 boundary. It is marked `ends_session = true` in the rule table, and the next file

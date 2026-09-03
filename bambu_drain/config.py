@@ -36,6 +36,17 @@ class Rule:
     # to 18. Splitting on time alone would need a ~22 minute threshold, four
     # minutes above normal, which would fragment any print with a slow layer.
     ends_session: bool = False
+    # A fraction of the modal (full) segment size, below which a file is taken
+    # to have been closed EARLY — which for a rotating recording means the print
+    # stopped. 0 disables it.
+    #
+    # This is the strongest boundary signal available, because it is physical
+    # rather than inferential: the chamber recording rotates at a fixed size, so
+    # every full segment is within 0.1% of every other, and anything short marks
+    # a recording that was cut off. Measured across 61 segments: full ones were
+    # all 240.2-240.4 MB, and every genuine print ending came in at 12-91%.
+    # Nothing landed between 92% and 99%.
+    ends_session_if_short: float = 0.0
 
     def __post_init__(self) -> None:
         if self.group not in ("", "print"):
