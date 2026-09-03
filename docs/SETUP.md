@@ -27,6 +27,10 @@ enabled and an SSH key authorised. All three services run on the Pi.
 | **USB-C → USB-A cable that carries DATA** | see Part 1; this is not the default |
 | Multimeter | optional but strongly recommended for Part 1 |
 
+`setup/03-install.sh` installs **ffmpeg** as well, which is used to rebuild a
+timelapse when the printer keeps its own on internal storage. Without it that
+feature is simply off, so `doctor` checks for it.
+
 A **Pi Zero 2 W** avoids the whole power problem — it has *separate* power and
 data ports, so you plug a supply into one and the printer into the other. On a
 Pi 4 the single USB-C port must do one job or the other, which is what makes

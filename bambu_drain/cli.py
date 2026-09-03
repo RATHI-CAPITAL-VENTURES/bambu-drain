@@ -152,10 +152,24 @@ def cmd_doctor(args) -> int:
     # config did not, and every timelapse recorded ends=0 for a day.
     grouped = [r for r in cfg.drain.rules if r.group == "print"]
     if grouped:
-        check("a rule closes print sessions",
-              any(r.ends_session for r in cfg.drain.rules),
-              "no rule has ends_session; consecutive prints will merge into one "
-              "folder. Add it to the timelapse rule in config.toml.")
+        # EITHER signal closes a session. This check originally tested only
+        # `ends_session` and was written before `ends_session_if_short` existed,
+        # so a config relying on short-segment detection alone — which is the
+        # more reliable of the two — failed a check meant to catch drift. The
+        # drift-detector had drifted.
+        closers = [r for r in cfg.drain.rules
+                   if r.ends_session or r.ends_session_if_short]
+        check("a rule closes print sessions", bool(closers),
+              "no rule has ends_session or ends_session_if_short; consecutive "
+              "prints will merge into one folder. See config.example.toml.")
+
+    # An enabled feature with a missing binary is off and silent, which is the
+    # failure this project keeps rediscovering.
+    if cfg.render.enabled:
+        from . import render as _render
+        check("ffmpeg (rebuilds missing timelapses)", _render.available(),
+              "sudo apt-get install -y ffmpeg — without it, prints whose "
+              "timelapse went to the printer's internal storage get nothing")
 
     check(f"ssh to {cfg.ship.host}", shipper.reachable(),
           f"ssh-copy-id -i {cfg.ship.ssh_key}.pub {cfg.ship.host}")
