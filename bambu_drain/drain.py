@@ -32,7 +32,8 @@ def session_name(when: float) -> str:
     return f"{datetime.fromtimestamp(when):%Y-%m-%d_%H%M}"
 
 
-def dest_relpath(rule, src: Path, when: float, session: str | None = None) -> str:
+def dest_relpath(rule, src: Path, when: float, session: str | None = None,
+                 size: int | None = None) -> str:
     """Where a file lands in the archive.
 
     Per-print files go under `prints/<session>/<dest>/`, so everything from one
@@ -40,7 +41,11 @@ def dest_relpath(rule, src: Path, when: float, session: str | None = None) -> st
     timelapse. Everything else keeps the dated layout, because a sliced model or
     a firmware image does not belong to a print.
     """
-    name = rule.rename or src.name
+    # An empty file does not get the canonical name. The printer exported a
+    # 0-byte timelapse alongside a real 15.9 MB one; sorted first, the empty one
+    # took `timelapse.mp4` and the real one was pushed to a hash-suffixed name.
+    # Keeping its own filename makes it obviously not the timelapse.
+    name = rule.rename if (rule.rename and size != 0) else src.name
     if rule.group == "print" and session:
         parts = ["prints", session] + ([rule.dest] if rule.dest else []) + [name]
         return "/".join(parts)
@@ -273,7 +278,8 @@ class Drainer:
                         continue
 
                     session = self.session_for(st.st_mtime) if rule.group == "print" else None
-                    rel = dest_relpath(rule, src, st.st_mtime, session)
+                    rel = dest_relpath(rule, src, st.st_mtime, session,
+                                       size=st.st_size)
                     target = _unique(d.staging / rel, sha)
 
                     if dry_run:
