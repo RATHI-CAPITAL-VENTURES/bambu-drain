@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import shutil
 import time
 from datetime import datetime, timezone
@@ -27,9 +28,40 @@ from .ledger import Ledger
 log = logging.getLogger("bambu_drain.drain")
 
 
-def session_name(when: float) -> str:
-    """A print session's folder name, from the first file that opened it."""
-    return f"{datetime.fromtimestamp(when):%Y-%m-%d_%H%M}"
+# Bambu Studio names the sent file after the PROCESS PRESET whenever the project
+# itself is unnamed, so roughly half of them are "0.2mm layer, 2 walls, 15%
+# infill" rather than anything about the model. Slicing also strips the mesh
+# objects, so there is no better name inside the file — this is the only signal
+# there is, and it has to be filtered.
+_PRESET_MARKERS = ("infill", "walls", "mm layer", "mm nozzle", "layer,",
+                   "@bbl", "@bambu")
+# Bambu's own presets are overwhelmingly "<layer height>mm <quality> @<printer>"
+# — "0.16mm Optimal @BBL X1C", "0.2mm Standard". A name that opens with a layer
+# height is a preset, not a model.
+_PRESET_PREFIX = re.compile(r"^\d+(\.\d+)?\s*mm\b", re.I)
+
+
+def model_name(src: Path) -> str | None:
+    """A usable model name from a sliced file, or None if it is a preset name."""
+    name = src.name
+    for suffix in (".gcode.3mf", ".3mf", ".gcode"):
+        if name.lower().endswith(suffix):
+            name = name[: -len(suffix)]
+            break
+    name = name.strip()
+    if not name:
+        return None
+    low = name.lower()
+    if any(m in low for m in _PRESET_MARKERS) or _PRESET_PREFIX.match(name):
+        return None
+    slug = re.sub(r"[^\w.-]+", "_", name).strip("_.")
+    return slug[:60] or None
+
+
+def session_name(when: float, model: str | None = None) -> str:
+    """A print session's folder name, from the file that opened it."""
+    stamp = f"{datetime.fromtimestamp(when):%Y-%m-%d_%H%M}"
+    return f"{stamp}_{model}" if model else stamp
 
 
 def dest_relpath(rule, src: Path, when: float, session: str | None = None,
@@ -82,6 +114,13 @@ def fsync_file_and_parent(path: Path) -> None:
         os.fsync(dfd)
     finally:
         os.close(dfd)
+
+
+# A print's last segment and its timelapse are flushed together, and BOTH end
+# the session. Without this, whichever sorts first closes the print and the
+# other opens a spurious one-file session. Two closers this close together are
+# one print's teardown, not two prints.
+TEARDOWN_SECONDS = 120
 
 
 def _size_family(src: Path) -> str:
@@ -200,15 +239,23 @@ class Drainer:
             return False          # not enough history to know what "full" is
         return size < modal * rule.ends_session_if_short
 
-    def session_for(self, mtime: float) -> str:
+    def session_for(self, mtime: float, rule=None, src: Path | None = None,
+                    is_closer: bool = False) -> str:
         """Which print run a file belongs to, by gap from the previous one.
 
         There is no print id anywhere in the filenames, so this is a heuristic —
         see `session_gap_minutes`. It holds up because the measured separation is
         not close: 9-18 minutes within a print, 805 minutes between them.
         """
-        gap = self.cfg.drain.session_gap_minutes * 60
+        model = model_name(src) if (rule and rule.names_session and src) else None
         last = self.ledger.last_print_file()
+
+        if rule and rule.starts_session:
+            # The sliced file means a job was just sent: a new print, always.
+            prev = last["session"] if last else None
+            return _distinct(session_name(mtime, model), prev)
+
+        gap = self.cfg.drain.session_gap_minutes * 60
         if last and last["src_mtime"] is not None:
             if not last["ends_session"] and abs(mtime - last["src_mtime"]) <= gap:
                 return last["session"]
@@ -216,8 +263,8 @@ class Drainer:
             # Session names are minute-granular for readability, so a genuinely
             # new session starting inside the same minute would silently reuse
             # the previous folder. Rare, but a collision is a merged print.
-            return _distinct(session_name(mtime), last["session"])
-        return session_name(mtime)
+            return _distinct(session_name(mtime, model), last["session"])
+        return session_name(mtime, model)
 
     def _ensure_medium_present(self) -> None:
         try:
@@ -286,7 +333,8 @@ class Drainer:
                     imagefs.candidates(mp, d.rules, d.min_file_age_minutes * 60),
                     # Closers last within the same second — see ledger ordering.
                     key=lambda t: (t[2].st_mtime,
-                                   1 if self.closes_session(t[1], t[0], t[2].st_size) else 0),
+                                   -1 if t[1].starts_session else
+                                   (1 if self.closes_session(t[1], t[0], t[2].st_size) else 0)),
                 )
                 for src, rule, st in found:
                     if time.monotonic() - started > budget:
@@ -304,7 +352,9 @@ class Drainer:
                             src.unlink(missing_ok=True)
                         continue
 
-                    session = self.session_for(st.st_mtime) if rule.group == "print" else None
+                    ends = self.closes_session(rule, src, st.st_size)
+                    session = (self.session_for(st.st_mtime, rule, src, ends)
+                               if rule.group == "print" else None)
                     rel = dest_relpath(rule, src, st.st_mtime, session,
                                        size=st.st_size)
                     target = _unique(d.staging / rel, sha)
@@ -333,7 +383,7 @@ class Drainer:
                     self.ledger.record_drained(
                         sha, src.name, str(target.relative_to(d.staging)), st.st_size,
                         target, session=session, src_mtime=st.st_mtime,
-                        ends_session=self.closes_session(rule, src, st.st_size),
+                        ends_session=ends,
                     )
                     if rule.delete:
                         src.unlink(missing_ok=True)

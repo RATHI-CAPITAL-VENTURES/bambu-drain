@@ -79,14 +79,26 @@ group  = "print"
 dest   = "video"
 delete = true
 
+# The sliced file the printer receives when you press print. It lands ~15
+# minutes BEFORE the first chamber segment, which makes it the only START marker
+# available — every other signal can only tell us a print has ENDED. Its
+# filename is the project name, so it names the folder too.
+#
+# Bambu Studio falls back to the PROCESS PRESET name when the project is
+# unnamed, so roughly half arrive as "0.2mm layer, 2 walls, 15% infill". Those
+# are detected and the folder keeps a plain timestamp instead.
 [[rule]]
 glob   = "**/*.3mf"
-dest   = "models"
+group  = "print"
+dest   = ""                              # the print folder root
+starts_session = true
+names_session  = true
 delete = true
 
 [[rule]]
 glob   = "**/*.gcode"
-dest   = "models"
+group  = "print"
+dest   = ""
 delete = true
 
 # The P2S writes JPEG thumbnails alongside every recording, in
