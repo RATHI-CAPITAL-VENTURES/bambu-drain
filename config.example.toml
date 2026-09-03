@@ -62,6 +62,15 @@ delete = true
 glob   = "**/*.mp4"
 group  = "print"
 dest   = "video"
+# The chamber recording rotates at a FIXED SIZE, so every full segment is within
+# 0.1% of every other. A short one was closed early, which means the print
+# stopped — the strongest boundary signal available, and the only one that works
+# when the timelapse went to internal storage. The full size is learned from
+# history, not configured.
+#
+# Measured over 61 segments: full ones were all 240.2-240.4 MB, every genuine
+# ending came in at 12-91%, and nothing landed between 92% and 99%.
+ends_session_if_short = 0.95
 delete = true
 
 [[rule]]

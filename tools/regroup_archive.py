@@ -52,24 +52,55 @@ def classify(path: Path) -> tuple[str, str] | None:
     return None
 
 
-def sessions(files: list[Path], gap_seconds: float) -> dict[Path, str]:
+def modal_size(files: list[Path]) -> int | None:
+    """The rotation size of the chamber recording, learned from the files.
+
+    Every full segment is within 0.1% of every other, so the mode is exact and
+    there is nothing to configure.
+    """
+    from collections import Counter
+    sizes = [f.stat().st_size for f in files
+             if classify(f) and classify(f)[0] == "video"]
+    if len(sizes) < 5:
+        return None
+    size, count = Counter(sizes).most_common(1)[0]
+    return size if count >= 5 else None
+
+
+def sessions(files: list[Path], gap_seconds: float, short_ratio: float = 0.95
+             ) -> dict[Path, str]:
     """Group print files into sessions, chronologically.
 
-    A session ends when the printer writes its timelapse — that is the only
-    reliable boundary. A failed print and its redo were 26 minutes apart while
-    gaps WITHIN a print reach 18, so no gap threshold separates them without
-    risking fragmenting a print.
+    Two things end a session, in order of reliability:
+
+    1. **A short chamber segment.** The recording rotates at a fixed size, so a
+       segment that comes in under `short_ratio` of the modal size was closed
+       early — meaning the print stopped. Physical, not inferential.
+    2. **The timelapse**, written once when a print ends — when it reaches the
+       drive at all, which it often does not.
+
+    The time gap is only a last resort. A real boundary measured 18.2 minutes
+    while gaps within a print reach 14, so no threshold separates them without
+    risking fragmenting a long print.
     """
     out: dict[Path, str] = {}
     current: str | None = None
     last: float | None = None
     closed = False
+    modal = modal_size(files)
+
+    def ends(p: Path) -> bool:
+        c = classify(p)
+        if c and c[0] == "timelapse":
+            return True
+        if modal and c and c[0] == "video":
+            return p.stat().st_size < modal * short_ratio
+        return False
 
     # Ties: the truncated final segment and the timelapse land in the same
     # second, and the closer is by definition the end of the run.
     def key(p: Path):
-        c = classify(p)
-        return (p.stat().st_mtime, 1 if c and c[0] == "timelapse" else 0)
+        return (p.stat().st_mtime, 1 if ends(p) else 0)
 
     for f in sorted(files, key=key):
         m = f.stat().st_mtime
@@ -82,12 +113,11 @@ def sessions(files: list[Path], gap_seconds: float) -> dict[Path, str]:
             closed = False
         out[f] = current
         last = m
-        c = classify(f)
-        closed = bool(c and c[0] == "timelapse")
+        closed = ends(f)
     return out
 
 
-def plan(src: Path, dest: Path, gap_seconds: float):
+def plan(src: Path, dest: Path, gap_seconds: float, short_ratio: float = 0.95):
     print_files, others, ignored = [], [], []
     for f in sorted(src.rglob("*")):
         if not f.is_file() or f.name.startswith("."):
@@ -100,7 +130,7 @@ def plan(src: Path, dest: Path, gap_seconds: float):
         else:
             print_files.append(f)
 
-    sess = sessions(print_files, gap_seconds)
+    sess = sessions(print_files, gap_seconds, short_ratio)
     moves: list[tuple[Path, Path]] = []
     for f in print_files:
         kind, sub = classify(f)
@@ -119,6 +149,9 @@ def main() -> int:
     ap.add_argument("--src", required=True, type=Path)
     ap.add_argument("--dest", type=Path, help="defaults to --src (in place)")
     ap.add_argument("--gap", type=float, default=45.0, help="session gap, minutes")
+    ap.add_argument("--short", type=float, default=0.95,
+                    help="fraction of the modal segment size below which a "
+                         "segment is taken to end a print (default 0.95)")
     ap.add_argument("--apply", action="store_true", help="actually move files")
     args = ap.parse_args()
 
@@ -128,7 +161,7 @@ def main() -> int:
         print(f"error: {src} is not a directory", file=sys.stderr)
         return 1
 
-    moves, sess, ignored = plan(src, dest, args.gap * 60)
+    moves, sess, ignored = plan(src, dest, args.gap * 60, args.short)
     if not moves:
         print("nothing to move")
         return 0

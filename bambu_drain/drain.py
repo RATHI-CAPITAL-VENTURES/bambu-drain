@@ -84,6 +84,16 @@ def fsync_file_and_parent(path: Path) -> None:
         os.close(dfd)
 
 
+def _size_family(src: Path) -> str:
+    """A SQL LIKE pattern matching files that rotate at the same size.
+
+    `ipcam-record.<ts>.<n>.mp4` -> `ipcam-record%.mp4`, so the modal size is
+    computed across the whole family rather than per print.
+    """
+    stem = src.name.split(".")[0]
+    return f"{stem}%{src.suffix}"
+
+
 def _distinct(name: str, previous: str | None) -> str:
     """A session name that cannot collide with the one it follows."""
     if previous is None:
@@ -174,6 +184,22 @@ class Drainer:
             )
         return None
 
+    def closes_session(self, rule, src: Path, size: int) -> bool:
+        """Does this file end a print?
+
+        Either the rule says so outright (the timelapse, written once at the
+        end), or the file is a rotating segment that came in short — which means
+        the recording was cut off, which means the print stopped.
+        """
+        if rule.ends_session:
+            return True
+        if not rule.ends_session_if_short:
+            return False
+        modal = self.ledger.modal_size(_size_family(src))
+        if not modal:
+            return False          # not enough history to know what "full" is
+        return size < modal * rule.ends_session_if_short
+
     def session_for(self, mtime: float) -> str:
         """Which print run a file belongs to, by gap from the previous one.
 
@@ -259,7 +285,8 @@ class Drainer:
                 found = sorted(
                     imagefs.candidates(mp, d.rules, d.min_file_age_minutes * 60),
                     # Closers last within the same second — see ledger ordering.
-                    key=lambda t: (t[2].st_mtime, 1 if t[1].ends_session else 0),
+                    key=lambda t: (t[2].st_mtime,
+                                   1 if self.closes_session(t[1], t[0], t[2].st_size) else 0),
                 )
                 for src, rule, st in found:
                     if time.monotonic() - started > budget:
@@ -306,7 +333,7 @@ class Drainer:
                     self.ledger.record_drained(
                         sha, src.name, str(target.relative_to(d.staging)), st.st_size,
                         target, session=session, src_mtime=st.st_mtime,
-                        ends_session=rule.ends_session,
+                        ends_session=self.closes_session(rule, src, st.st_size),
                     )
                     if rule.delete:
                         src.unlink(missing_ok=True)
