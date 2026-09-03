@@ -142,5 +142,25 @@ poll_seconds  = 300
 # 0 = keep forever. Set to e.g. 60 if iCloud starts hurting.
 retention_days = 0
 
+# --- rebuilding a timelapse the printer kept for itself --------------------
+# On the P2S the assembled timelapse often goes to INTERNAL storage and never
+# reaches the drive, so a print arrives as hours of chamber footage and nothing
+# to watch. This rebuilds one from the footage.
+#
+# It runs ON THE PI, before shipping, because the segments are still here.
+# Doing it on the Mac would mean pulling gigabytes back out of iCloud.
+#
+# Keyframes only. Measured on a Pi 4 with one 750s segment:
+#     full decode + select every 275th frame   294s
+#     -skip_frame nokey, every 9th keyframe     66s
+# A 4.4-hour print is 21 segments: 103 minutes against 23.
+[render]
+enabled        = true
+length_seconds = 60
+fps            = 30
+crf            = 23
+# Below this many segments a "print" is a false start, not worth rendering.
+min_segments   = 3
+
 [health]
 status_file = "/srv/bambu-drain/status.json"

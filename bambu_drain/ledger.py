@@ -78,6 +78,42 @@ class Ledger:
              session, src_mtime, 1 if ends_session else 0),
         )
 
+    def sessions_needing_render(self) -> list[str]:
+        """Closed sessions whose segments are still staged and have no timelapse.
+
+        All three conditions matter. Closed, or we would render a print that is
+        still running. Still staged, or there is nothing left on the Pi to render
+        from. And no timelapse of either kind, or we would redo work — or worse,
+        overwrite the printer's own.
+        """
+        rows = self.db.execute(
+            "SELECT session FROM files WHERE session IS NOT NULL "
+            "GROUP BY session HAVING "
+            "  MAX(ends_session) = 1 "
+            "  AND SUM(CASE WHEN staging_path IS NOT NULL THEN 1 ELSE 0 END) > 0 "
+            "  AND SUM(CASE WHEN dest_rel LIKE '%timelapse%.mp4' THEN 1 ELSE 0 END) = 0"
+        )
+        return [r["session"] for r in rows]
+
+    def staged_segments(self, session: str) -> list[Path]:
+        """Staged chamber segments for a session, in order."""
+        rows = self.db.execute(
+            "SELECT staging_path FROM files WHERE session = ? "
+            "AND staging_path IS NOT NULL AND src_name LIKE 'ipcam-record%.mp4' "
+            "ORDER BY src_mtime", (session,))
+        return [Path(r["staging_path"]) for r in rows]
+
+    def session_dest_dir(self, session: str) -> str | None:
+        """The archive-relative folder a session's files land in."""
+        row = self.db.execute(
+            "SELECT dest_rel FROM files WHERE session = ? LIMIT 1", (session,)
+        ).fetchone()
+        if not row:
+            return None
+        parts = row["dest_rel"].split("/")
+        # prints/<session>/... -> prints/<session>
+        return "/".join(parts[:2]) if len(parts) >= 2 else None
+
     def modal_size(self, like: str, minimum: int = 5) -> int | None:
         """The rotation size for a family of files, or None if not yet known.
 

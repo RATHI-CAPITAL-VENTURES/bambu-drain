@@ -122,6 +122,23 @@ class ShipConfig:
 
 
 @dataclass(frozen=True)
+class RenderConfig:
+    """Rebuilding a timelapse the printer kept for itself.
+
+    Done on the Pi, before shipping, because the segments are still here — and
+    because pulling them back out of iCloud on the Mac is slow enough to have
+    bitten us twice.
+    """
+
+    enabled: bool = True
+    length_seconds: float = 60.0
+    fps: int = 30
+    crf: int = 23
+    # Below this, a "print" is a false start and not worth a timelapse.
+    min_segments: int = 3
+
+
+@dataclass(frozen=True)
 class HealthConfig:
     status_file: Path = Path("/srv/bambu-drain/status.json")
     # Where to push the status file on the ship host. RIA runs on the Mac and
@@ -136,6 +153,7 @@ class Config:
     gadget: GadgetConfig = field(default_factory=GadgetConfig)
     drain: DrainConfig = field(default_factory=DrainConfig)
     ship: ShipConfig = field(default_factory=ShipConfig)
+    render: RenderConfig = field(default_factory=RenderConfig)
     health: HealthConfig = field(default_factory=HealthConfig)
 
     @property
@@ -179,5 +197,6 @@ def from_dict(raw: dict) -> Config:
         gadget=GadgetConfig(**_paths(raw.get("gadget", {}), "image")),
         drain=DrainConfig(rules=rules, **drain_raw),
         ship=ShipConfig(**_paths(raw.get("ship", {}), "ssh_key")),
+        render=RenderConfig(**raw.get("render", {})),
         health=HealthConfig(**_paths(raw.get("health", {}), "status_file")),
     )

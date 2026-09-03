@@ -15,6 +15,7 @@ import time
 import time
 from pathlib import Path, PurePosixPath
 
+from . import render as render_mod
 from .ledger import Ledger
 from .lock import AlreadyRunning, single_instance
 
@@ -115,7 +116,42 @@ class Shipper:
             log.info("%s", exc)
             return {"shipped": 0, "bytes": 0, "pending": 0, "skipped": str(exc)}
 
+    def render_missing(self) -> int:
+        """Build timelapses for finished prints that never got one.
+
+        Runs BEFORE shipping, because shipping deletes the staged segments and
+        they are the raw material. Doing it here rather than on the Mac avoids
+        pulling gigabytes back out of iCloud.
+        """
+        if not self.cfg.render.enabled or not render_mod.available():
+            return 0
+        built = 0
+        for session in self.ledger.sessions_needing_render():
+            segments = [p for p in self.ledger.staged_segments(session) if p.exists()]
+            if len(segments) < self.cfg.render.min_segments:
+                continue
+            folder = self.ledger.session_dest_dir(session)
+            if not folder:
+                continue
+            out = self.cfg.drain.staging / folder / render_mod.OUT_NAME
+            try:
+                render_mod.render(segments, out, self.cfg.render.length_seconds,
+                                  self.cfg.render.fps, self.cfg.render.crf)
+            except render_mod.RenderError as exc:
+                log.error("render failed for %s: %s", session, exc)
+                self.ledger.event("render_error", f"{session}: {exc}")
+                continue
+            import hashlib
+            sha = hashlib.sha256(out.read_bytes()).hexdigest()
+            self.ledger.record_drained(
+                sha, render_mod.OUT_NAME, f"{folder}/{render_mod.OUT_NAME}",
+                out.stat().st_size, out, session=session, src_mtime=time.time())
+            self.ledger.event("rendered", f"{session}: {out.stat().st_size} bytes")
+            built += 1
+        return built
+
     def _run_once_locked(self) -> dict:
+        self.render_missing()
         pending = self.ledger.unshipped()
         if not pending:
             return {"shipped": 0, "bytes": 0, "pending": 0}
