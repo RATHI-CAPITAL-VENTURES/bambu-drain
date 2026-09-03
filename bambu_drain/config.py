@@ -47,6 +47,12 @@ class Rule:
     # all 240.2-240.4 MB, and every genuine print ending came in at 12-91%.
     # Nothing landed between 92% and 99%.
     ends_session_if_short: float = 0.0
+    # The sliced file lands ~15 minutes BEFORE a print's first segment, because
+    # the printer writes it when the job is sent. That makes it the only start
+    # marker available — everything else can only tell us a print has ended.
+    starts_session: bool = False
+    # ...and its filename is the project name, so it can name the folder too.
+    names_session: bool = False
 
     def __post_init__(self) -> None:
         if self.group not in ("", "print"):

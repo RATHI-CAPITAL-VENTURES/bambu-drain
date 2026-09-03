@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import os
+import re
 import shutil
 import sys
 from pathlib import Path
@@ -29,11 +30,29 @@ VIDEO_EXT = {".mp4", ".avi"}
 THUMB_EXT = {".jpg", ".jpeg", ".png"}
 MODEL_EXT = {".3mf", ".gcode"}
 
+# Shared with the drain loop rather than reimplemented. The first version of
+# this file duplicated both the model-name rules AND the modal-size calculation,
+# and the duplicate kept the exact-value mode long after the real one moved to a
+# median — so boundary detection here was silently disabled while the daemon's
+# worked fine. Two copies of a rule is how they drift.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from bambu_drain.drain import model_name  # noqa: E402
+
+
+# Files this project GENERATES, which must never be mistaken for printer output.
+# `timelapse-reconstructed.mp4` is a 169 MB .mp4 sitting in a print folder; read
+# as a chamber segment it came in at 70% of the rotation size, which reads as a
+# print ending and split one print into two. A tool that eats its own output
+# produces different results on the second run than the first.
+_GENERATED = {"timelapse-reconstructed.mp4"}
+
 
 def classify(path: Path) -> tuple[str, str] | None:
     """(kind, subfolder) for a file, or None to leave it alone."""
     ext = path.suffix.lower()
     name = path.name
+    if name in _GENERATED:
+        return None
     if ext in VIDEO_EXT:
         # The assembled timelapse is one per print and belongs at the root of
         # its folder; the chamber segments go in video/.
@@ -48,23 +67,23 @@ def classify(path: Path) -> tuple[str, str] | None:
     if ext in THUMB_EXT:
         return ("thumb", "thumbnails")
     if ext in MODEL_EXT:
-        return ("model", "")
+        # The sliced file belongs to its print and starts it.
+        return ("sliced", "")
     return None
 
 
 def modal_size(files: list[Path]) -> int | None:
     """The rotation size of the chamber recording, learned from the files.
 
-    Every full segment is within 0.1% of every other, so the mode is exact and
-    there is nothing to configure.
+    MEDIAN, not mode — real segments differ by a few kilobytes, so no exact
+    size ever repeats and a mode returns nothing. Same reasoning, and the same
+    bug once, as `Ledger.modal_size`.
     """
-    from collections import Counter
-    sizes = [f.stat().st_size for f in files
-             if classify(f) and classify(f)[0] == "video"]
+    sizes = sorted(f.stat().st_size for f in files
+                   if classify(f) and classify(f)[0] == "video")
     if len(sizes) < 5:
         return None
-    size, count = Counter(sizes).most_common(1)[0]
-    return size if count >= 5 else None
+    return sizes[len(sizes) // 2]
 
 
 def sessions(files: list[Path], gap_seconds: float, short_ratio: float = 0.95
@@ -88,6 +107,13 @@ def sessions(files: list[Path], gap_seconds: float, short_ratio: float = 0.95
     last: float | None = None
     closed = False
     modal = modal_size(files)
+    # See TEARDOWN_SECONDS in bambu_drain.drain — a print's last segment and its
+    # timelapse are flushed together and both end the session.
+    TEARDOWN = 120
+
+    def starts(p: Path) -> bool:
+        c = classify(p)
+        return bool(c and c[0] == "sliced")
 
     def ends(p: Path) -> bool:
         c = classify(p)
@@ -100,12 +126,17 @@ def sessions(files: list[Path], gap_seconds: float, short_ratio: float = 0.95
     # Ties: the truncated final segment and the timelapse land in the same
     # second, and the closer is by definition the end of the run.
     def key(p: Path):
-        return (p.stat().st_mtime, 1 if ends(p) else 0)
+        # A starter sorts before everything sharing its second; a closer after.
+        return (p.stat().st_mtime, -1 if starts(p) else (1 if ends(p) else 0))
 
     for f in sorted(files, key=key):
         m = f.stat().st_mtime
-        if current is None or closed or last is None or (m - last) > gap_seconds:
-            name = f"{dt.datetime.fromtimestamp(m):%Y-%m-%d_%H%M}"
+        teardown = closed and ends(f) and last is not None and (m - last) <= TEARDOWN
+        if not teardown and (starts(f) or current is None or closed
+                             or last is None or (m - last) > gap_seconds):
+            stamp = f"{dt.datetime.fromtimestamp(m):%Y-%m-%d_%H%M}"
+            mn = model_name(f) if starts(f) else None
+            name = f"{stamp}_{mn}" if mn else stamp
             if name == current:
                 base, _, n = (current or "").rpartition("-")
                 name = f"{base}-{int(n) + 1}" if base and n.isdigit() else f"{name}-2"
@@ -125,8 +156,6 @@ def plan(src: Path, dest: Path, gap_seconds: float, short_ratio: float = 0.95):
         c = classify(f)
         if c is None:
             ignored.append(f)
-        elif c[0] == "model":
-            others.append(f)
         else:
             print_files.append(f)
 
@@ -134,12 +163,9 @@ def plan(src: Path, dest: Path, gap_seconds: float, short_ratio: float = 0.95):
     moves: list[tuple[Path, Path]] = []
     for f in print_files:
         kind, sub = classify(f)
-        name = "timelapse.mp4" if kind == "timelapse" else f.name
+        name = "timelapse.mp4" if kind == "timelapse" and f.stat().st_size else f.name
         parts = ["prints", sess[f]] + ([sub] if sub else []) + [name]
         moves.append((f, dest.joinpath(*parts)))
-    for f in others:
-        d = dt.datetime.fromtimestamp(f.stat().st_mtime, tz=dt.timezone.utc)
-        moves.append((f, dest / "models" / f"{d:%Y}" / f"{d:%m}" / f.name))
     return moves, sess, ignored
 
 
