@@ -4,42 +4,39 @@
 header equals `VERSION`, is new relative to the base branch, and increases
 monotonically. A MINOR bump is a milestone and must ship a retro.
 
-## 0.6.0 — 2026-09-03
+## 0.7.0 — 2026-09-03
 
 
-Prints are named after their model, and everything about a print lives in one
-folder.
+Missing timelapses are rebuilt automatically, on the Pi.
 
 ### Added
 
-- **`starts_session` — the sliced file opens a print.** The printer writes the
-  `.gcode.3mf` when the job is *sent*, ~15 minutes before the first chamber
-  segment. That makes it the only START marker available; every other signal can
-  only say a print has ended.
-- **`names_session` — and it names the folder**, so a print reads as
-  `2026-09-02_2017_Steamer_Cable_Holder_v1`.
-- The sliced file now lives **inside its print folder** rather than a separate
-  `models/` tree. It belongs to that print.
-- **`TEARDOWN_SECONDS`** — a print's last segment and its timelapse are flushed
-  together and both end the session. Without this, whichever sorted first closed
-  the print and the other opened a spurious one-file session.
+- **`[render]` — the ship loop rebuilds a timelapse before shipping.** The P2S
+  usually keeps the assembled timelapse on its own internal storage, so a print
+  arrives as hours of chamber footage and nothing to watch. This fills the gap
+  while the segments are still on the Pi.
 
-### Fixed
+  It runs **before** shipping on purpose: shipping deletes the staged segments,
+  and they are the raw material. Doing it on the Mac instead would mean pulling
+  gigabytes back out of iCloud — slow, and the thing that has bitten this
+  project twice.
 
-- **`regroup_archive.py` duplicated the model-name and modal-size logic**, and
-  the duplicate kept an exact-value mode long after the real one moved to a
-  median — so boundary detection in the migration was silently disabled while
-  the daemon's worked. It now imports the shared implementation.
-- **The migration reclassified its own output as printer data.** A 169 MB
-  `timelapse-reconstructed.mp4` read as a chamber segment at 70% of the rotation
-  size, which looks like a print ending, and split one print into two.
+- **Keyframes only**, which is what makes it viable on a Pi 4. Measured on one
+  real 750 s segment:
 
-### Known limit
+  | approach | time |
+  |---|---|
+  | full decode + select every 275th frame | 294 s |
+  | `-skip_frame nokey`, every 9th keyframe | **66 s** |
 
-Bambu Studio names the sent file after the **process preset** whenever the
-Studio project is unnamed, so roughly half arrive as
-`0.2mm layer, 2 walls, 15% infill`. Those are detected and the folder keeps a
-plain timestamp. Slicing strips the mesh objects, so there is no better name
-inside the file — this is the only signal there is.
+  A 4.4-hour print is 21 segments: 103 minutes against 23. The footage carries
+  ~774 keyframes per segment — about one per second, far more than the ~1800
+  frames a 60-second timelapse needs — and an I-frame is a full-quality picture
+  rather than a reconstructed one.
+
+- A session is only rendered when it is **closed**, its segments are **still
+  staged**, and it has **no timelapse of either kind**. Rendering a running
+  print would be worse than useless; rendering a shipped one is impossible; and
+  the third condition stops us overwriting the printer's own.
 
 Older series are archived under `docs/changelog/`.
