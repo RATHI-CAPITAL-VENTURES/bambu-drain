@@ -147,6 +147,16 @@ def cmd_doctor(args) -> int:
             check(f"host attached (usb state: {st})", st == "configured",
                   "not attached = no host/VBUS: check the cable carries DATA, "
                   "not just power. A charge-only cable gives exactly this.")
+    # A config predating a feature loads fine and silently loses it. This one
+    # cost a session split: the code supported `ends_session`, the deployed
+    # config did not, and every timelapse recorded ends=0 for a day.
+    grouped = [r for r in cfg.drain.rules if r.group == "print"]
+    if grouped:
+        check("a rule closes print sessions",
+              any(r.ends_session for r in cfg.drain.rules),
+              "no rule has ends_session; consecutive prints will merge into one "
+              "folder. Add it to the timelapse rule in config.toml.")
+
     check(f"ssh to {cfg.ship.host}", shipper.reachable(),
           f"ssh-copy-id -i {cfg.ship.ssh_key}.pub {cfg.ship.host}")
     return 0 if ok else 1

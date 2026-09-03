@@ -4,6 +4,29 @@
 header equals `VERSION`, is new relative to the base branch, and increases
 monotonically. A MINOR bump is a milestone and must ship a retro.
 
+## 0.4.2 — 2026-09-02
+
+### Fixed
+
+- **A 0-byte export claimed the canonical `timelapse.mp4`.** The printer
+  exported an empty timelapse beside a real 15.9 MB one; sorted first, the empty
+  file took the name and the real one was pushed to `timelapse-b79482df.mp4`.
+  An empty file now keeps its own filename, which makes it obviously not the
+  timelapse.
+- **`doctor` now checks that some rule closes print sessions.** A config
+  predating a feature loads fine and silently loses it — which is exactly what
+  happened: the code supported `ends_session`, the deployed config did not, and
+  every timelapse recorded `ends=0` until someone read the ledger.
+
+### Known limit, now documented
+
+- **Manually exported timelapses all share the export time.** Copying them from
+  the printer's internal storage to USB stamps every file with the moment of the
+  copy, so they group by *when you exported* rather than by which print they
+  belong to. The true timestamp survives only in the filename
+  (`video_2026-09-02_21-51-18.mp4`), and the printer's clock is ~12 h off, so it
+  is usable for ordering but not for absolute time.
+
 ## 0.4.1 — 2026-09-02
 
 ### Added

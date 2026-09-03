@@ -414,6 +414,20 @@ distinguishes them.
   boundaries are chronological and a backlog is drained all at once long after
   the fact.
 
+### Manually exported timelapses cannot be grouped by time
+
+If you copy timelapses from the printer's internal storage onto the USB drive
+through its UI, **every exported file gets the mtime of the copy**. Six files
+exported in one go arrive stamped with the same second, so they land in a single
+session named for the moment you pressed the button rather than for any print.
+
+The real timestamp survives only in the filename — `video_2026-09-02_21-51-18.mp4`
+— and the printer's clock is ~12 hours off, so it orders correctly and lies about
+absolute time. Parsing it is possible and not currently done.
+
+The practical advice is simpler: **export one print's timelapse at a time**, and
+it lands in its own session.
+
 ### Session names
 
 `YYYY-MM-DD_HHMM`, from the first file that opened the session — and taken from

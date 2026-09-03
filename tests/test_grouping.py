@@ -247,3 +247,32 @@ class TestSessionNameCollisions(unittest.TestCase):
     def test_no_previous_session(self):
         from bambu_drain.drain import _distinct
         self.assertEqual(_distinct("2026-09-02_0927", None), "2026-09-02_0927")
+
+
+class TestEmptyFileDoesNotClaimTheName(unittest.TestCase):
+    """A 0-byte export must not take `timelapse.mp4` from a real one.
+
+    Observed: the printer exported an empty timelapse beside a 15.9 MB one.
+    Sorted first, the empty file claimed the canonical name and the real
+    timelapse was pushed to `timelapse-b79482df.mp4`.
+    """
+
+    def test_an_empty_file_keeps_its_own_name(self):
+        rel = dest_relpath(LAPSE, Path("timelapse/video_2026-09-02_21-51-18.mp4"),
+                           T, "2026-09-02_1548", size=0)
+        self.assertTrue(rel.endswith("video_2026-09-02_21-51-18.mp4"))
+        self.assertNotIn("timelapse.mp4", rel)
+
+    def test_a_real_file_still_gets_renamed(self):
+        rel = dest_relpath(LAPSE, Path("timelapse/video_2026-09-02_22-05-11.mp4"),
+                           T, "2026-09-02_1548", size=15_879_020)
+        self.assertTrue(rel.endswith("timelapse.mp4"))
+
+    def test_size_unknown_behaves_as_before(self):
+        rel = dest_relpath(LAPSE, Path("timelapse/video_x.mp4"), T, "s")
+        self.assertTrue(rel.endswith("timelapse.mp4"))
+
+    def test_rename_free_rules_are_unaffected_by_size(self):
+        self.assertEqual(
+            dest_relpath(VIDEO, Path("ipcam/rec.1.mp4"), T, "s", size=0),
+            "prints/s/video/rec.1.mp4")
