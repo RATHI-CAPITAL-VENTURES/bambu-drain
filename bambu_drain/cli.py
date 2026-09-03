@@ -157,6 +157,14 @@ def cmd_doctor(args) -> int:
               "no rule has ends_session; consecutive prints will merge into one "
               "folder. Add it to the timelapse rule in config.toml.")
 
+    # An enabled feature with a missing binary is off and silent, which is the
+    # failure this project keeps rediscovering.
+    if cfg.render.enabled:
+        from . import render as _render
+        check("ffmpeg (rebuilds missing timelapses)", _render.available(),
+              "sudo apt-get install -y ffmpeg — without it, prints whose "
+              "timelapse went to the printer's internal storage get nothing")
+
     check(f"ssh to {cfg.ship.host}", shipper.reachable(),
           f"ssh-copy-id -i {cfg.ship.ssh_key}.pub {cfg.ship.host}")
     return 0 if ok else 1

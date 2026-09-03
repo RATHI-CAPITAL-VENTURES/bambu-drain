@@ -4,6 +4,17 @@
 header equals `VERSION`, is new relative to the base branch, and increases
 monotonically. A MINOR bump is a milestone and must ship a retro.
 
+## 0.7.1 — 2026-09-03
+
+### Fixed
+
+- **ffmpeg was never a declared dependency.** Rendering shipped in 0.7.0 without
+  it appearing in any setup script, in `SETUP.md`, or in `doctor`. On a fresh
+  install `render.available()` would return False and the ship loop would skip
+  rendering **without a word** — an enabled feature that is silently off, which
+  is the failure this project keeps rediscovering. `setup/03-install.sh` now
+  installs it and `doctor` checks for it whenever `[render] enabled = true`.
+
 ## 0.7.0 — 2026-09-03
 
 

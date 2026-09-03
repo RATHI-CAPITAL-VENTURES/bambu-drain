@@ -29,6 +29,16 @@ else
   echo "· /etc/bambu-drain/config.toml exists, leaving it alone"
 fi
 
+# ffmpeg rebuilds a timelapse when the printer kept its own on internal
+# storage. Without it that feature is silently OFF — render.available() returns
+# False and the ship loop skips it without a word.
+if ! command -v ffmpeg >/dev/null 2>&1 || ! command -v ffprobe >/dev/null 2>&1; then
+  echo "· installing ffmpeg (for rebuilding missing timelapses)"
+  apt-get update -qq && apt-get install -y -qq ffmpeg
+else
+  echo "· ffmpeg already present"
+fi
+
 echo "· installing systemd units"
 cp "$SRC"/deploy/*.service /etc/systemd/system/
 systemctl daemon-reload
