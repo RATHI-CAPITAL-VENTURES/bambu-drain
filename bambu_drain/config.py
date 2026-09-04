@@ -136,6 +136,12 @@ class RenderConfig:
     crf: int = 23
     # Below this, a "print" is a false start and not worth a timelapse.
     min_segments: int = 3
+    # Real-time bookends. Sampling one frame per ~9 seconds compresses the first
+    # minute of a print into about 0.2 seconds, so the bed levelling, the purge
+    # and the first layer — the parts worth watching — flash past invisibly. The
+    # same happens to the end. These play at normal speed.
+    head_seconds: float = 5.0
+    tail_seconds: float = 5.0
 
 
 @dataclass(frozen=True)

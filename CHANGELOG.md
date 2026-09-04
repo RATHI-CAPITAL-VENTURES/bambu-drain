@@ -4,55 +4,22 @@
 header equals `VERSION`, is new relative to the base branch, and increases
 monotonically. A MINOR bump is a milestone and must ship a retro.
 
-## 0.7.1 — 2026-09-03
+## 0.8.0 — 2026-09-03
 
-### Fixed
-
-- **ffmpeg was never a declared dependency.** Rendering shipped in 0.7.0 without
-  it appearing in any setup script, in `SETUP.md`, or in `doctor`. On a fresh
-  install `render.available()` would return False and the ship loop would skip
-  rendering **without a word** — an enabled feature that is silently off, which
-  is the failure this project keeps rediscovering. `setup/03-install.sh` now
-  installs it and `doctor` checks for it whenever `[render] enabled = true`.
-- **The drift-check had itself drifted.** `doctor`'s "a rule closes print
-  sessions" was written before `ends_session_if_short` existed and only tested
-  `ends_session`, so a config relying on short-segment detection alone — the
-  more reliable of the two signals — failed a check whose entire purpose is
-  catching that class of mistake. Found by the test the `tests` guard forced.
-
-## 0.7.0 — 2026-09-03
-
-
-Missing timelapses are rebuilt automatically, on the Pi.
 
 ### Added
 
-- **`[render]` — the ship loop rebuilds a timelapse before shipping.** The P2S
-  usually keeps the assembled timelapse on its own internal storage, so a print
-  arrives as hours of chamber footage and nothing to watch. This fills the gap
-  while the segments are still on the Pi.
+- **Real-time bookends on the timelapse.** At one frame per ~9 seconds of print,
+  the first minute — levelling, purge, first layer — lasted about **0.2 seconds**
+  and the end was equally invisible. `head_seconds` and `tail_seconds` (5 s each
+  by default) now play the opening and closing at normal speed, either side of
+  the sped-up body.
 
-  It runs **before** shipping on purpose: shipping deletes the staged segments,
-  and they are the raw material. Doing it on the Mac instead would mean pulling
-  gigabytes back out of iCloud — slow, and the thing that has bitten this
-  project twice.
+### Fixed
 
-- **Keyframes only**, which is what makes it viable on a Pi 4. Measured on one
-  real 750 s segment:
-
-  | approach | time |
-  |---|---|
-  | full decode + select every 275th frame | 294 s |
-  | `-skip_frame nokey`, every 9th keyframe | **66 s** |
-
-  A 4.4-hour print is 21 segments: 103 minutes against 23. The footage carries
-  ~774 keyframes per segment — about one per second, far more than the ~1800
-  frames a 60-second timelapse needs — and an I-frame is a full-quality picture
-  rather than a reconstructed one.
-
-- A session is only rendered when it is **closed**, its segments are **still
-  staged**, and it has **no timelapse of either kind**. Rendering a running
-  print would be worse than useless; rendering a shipped one is impossible; and
-  the third condition stops us overwriting the printer's own.
+- **The frame estimate counted the last segment as full.** A print's final
+  segment is always short — that is how the ending is detected — so the body
+  came out shorter than requested. Negligible across twenty segments, 50% wrong
+  across two.
 
 Older series are archived under `docs/changelog/`.

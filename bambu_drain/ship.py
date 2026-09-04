@@ -136,7 +136,9 @@ class Shipper:
             out = self.cfg.drain.staging / folder / render_mod.OUT_NAME
             try:
                 render_mod.render(segments, out, self.cfg.render.length_seconds,
-                                  self.cfg.render.fps, self.cfg.render.crf)
+                                  self.cfg.render.fps, self.cfg.render.crf,
+                                  self.cfg.render.head_seconds,
+                                  self.cfg.render.tail_seconds)
             except render_mod.RenderError as exc:
                 log.error("render failed for %s: %s", session, exc)
                 self.ledger.event("render_error", f"{session}: {exc}")
