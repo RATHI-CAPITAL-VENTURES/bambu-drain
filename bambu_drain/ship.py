@@ -138,7 +138,9 @@ class Shipper:
                 render_mod.render(segments, out, self.cfg.render.length_seconds,
                                   self.cfg.render.fps, self.cfg.render.crf,
                                   self.cfg.render.head_seconds,
-                                  self.cfg.render.tail_seconds)
+                                  self.cfg.render.tail_seconds,
+                                  self.cfg.render.skip_dead_air,
+                                  self.cfg.render.dead_air_cap)
             except render_mod.RenderError as exc:
                 log.error("render failed for %s: %s", session, exc)
                 self.ledger.event("render_error", f"{session}: {exc}")

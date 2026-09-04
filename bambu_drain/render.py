@@ -20,6 +20,7 @@ full-quality picture rather than a reconstructed one.
 from __future__ import annotations
 
 import logging
+import re
 import shutil
 import subprocess
 import tempfile
@@ -53,6 +54,40 @@ def count_keyframes(path: Path) -> int:
         return int(proc.stdout.strip())
     except (ValueError, AttributeError):
         return 0
+
+
+def motion_start(path: Path, threshold: float = 0.02, sustain: int = 3,
+                 cap: float = 120.0) -> float:
+    """When printing actually begins, in seconds into the first segment.
+
+    The recording starts before the print does — levelling, heating, the head
+    parked — so the opening seconds are literally motionless. Measured on a real
+    first segment: seconds 1-5 scored 0.000, sustained motion began around 29s,
+    and the purge showed up around 41-49s.
+
+    SUSTAINED motion, not a single frame's worth: that same segment had a lone
+    0.037 blip at t=0 with silence either side, and an instantaneous threshold
+    would have believed it.
+
+    Returns 0.0 if nothing convincing is found, so a failed detection degrades
+    to the previous behaviour rather than losing the start of the print. The cap
+    exists for the same reason — a print that genuinely begins slowly should be
+    clipped by at most `cap` seconds.
+    """
+    proc = subprocess.run(
+        ["ffmpeg", "-hide_banner", "-loglevel", "error", "-nostats",
+         "-t", str(cap + 30), "-i", str(path),
+         "-vf", "fps=1,select='gt(scene,0)',metadata=print:file=-",
+         "-an", "-f", "null", "-"],
+        capture_output=True, text=True, timeout=300,
+    )
+    scores = [float(m) for m in re.findall(r"scene_score=([0-9.]+)", proc.stdout + proc.stderr)]
+    if not scores:
+        return 0.0
+    for i in range(len(scores) - sustain + 1):
+        if all(v >= threshold for v in scores[i:i + sustain]):
+            return 0.0 if i == 0 else min(float(i), cap)
+    return 0.0
 
 
 def plan(segments: list[Path], length: float, fps: int) -> tuple[int, int]:
@@ -92,7 +127,8 @@ def _encode(args: list[str], out: Path, fps: int, crf: int) -> bool:
 
 def render(segments: list[Path], out: Path, length: float = 60.0,
            fps: int = 30, crf: int = 23,
-           head_seconds: float = 5.0, tail_seconds: float = 5.0) -> Path:
+           head_seconds: float = 5.0, tail_seconds: float = 5.0,
+           skip_dead_air: bool = True, dead_air_cap: float = 120.0) -> Path:
     """Sample the segments into a timelapse, bookended by real-time clips.
 
     Without the bookends the start and end are technically present and
@@ -115,11 +151,19 @@ def render(segments: list[Path], out: Path, length: float = 60.0,
         tmpd = Path(tmp)
         parts: list[Path] = []
 
-        # Head: the opening of the print, at normal speed.
+        # Head: the opening of the print, at normal speed — starting where the
+        # printer starts moving, not where the recording starts. Only the head
+        # needs this: at one frame per ~9 seconds the body renders half a minute
+        # of idling as three frames, which nobody sees.
         if head_seconds > 0:
+            first = sorted(segments)[0]
+            offset = motion_start(first, cap=dead_air_cap) if skip_dead_air else 0.0
+            if offset:
+                log.info("skipping %.0fs of dead air before the print starts", offset)
             head = tmpd / "head.mp4"
-            if _encode(["-i", str(sorted(segments)[0]), "-t", str(head_seconds)],
-                       head, fps, crf):
+            head_args = (["-ss", str(offset)] if offset else []) + \
+                        ["-i", str(first), "-t", str(head_seconds)]
+            if _encode(head_args, head, fps, crf):
                 parts.append(head)
 
         body = tmpd / "body.mp4"

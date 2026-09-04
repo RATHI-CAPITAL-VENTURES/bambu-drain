@@ -142,6 +142,13 @@ class RenderConfig:
     # same happens to the end. These play at normal speed.
     head_seconds: float = 5.0
     tail_seconds: float = 5.0
+    # The recording starts before the print does. Find the first sustained
+    # motion and start the head clip there, so it opens on the printer working
+    # rather than on it parked.
+    skip_dead_air: bool = True
+    # Never skip more than this: a print that genuinely begins slowly should
+    # lose at most this much, not its whole opening.
+    dead_air_cap: float = 120.0
 
 
 @dataclass(frozen=True)

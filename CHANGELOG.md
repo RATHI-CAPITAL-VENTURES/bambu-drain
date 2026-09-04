@@ -4,22 +4,29 @@
 header equals `VERSION`, is new relative to the base branch, and increases
 monotonically. A MINOR bump is a milestone and must ship a retro.
 
-## 0.8.0 — 2026-09-03
+## 0.9.0 — 2026-09-04
 
 
 ### Added
 
-- **Real-time bookends on the timelapse.** At one frame per ~9 seconds of print,
-  the first minute — levelling, purge, first layer — lasted about **0.2 seconds**
-  and the end was equally invisible. `head_seconds` and `tail_seconds` (5 s each
-  by default) now play the opening and closing at normal speed, either side of
-  the sped-up body.
+- **The head clip now opens on the printer working, not parked.** The recording
+  starts before the print does — levelling, heating, the head sitting still — so
+  a 5-second opening was 5 seconds of nothing. `motion_start()` finds the first
+  **sustained** motion and seeks there.
 
-### Fixed
+  Measured on a real first segment: seconds 1–5 scored **0.000**, sustained
+  motion began at **29 s**, the purge showed around 41–49 s. Detection returns
+  29 s on that footage.
 
-- **The frame estimate counted the last segment as full.** A print's final
-  segment is always short — that is how the ending is detected — so the body
-  came out shorter than requested. Negligible across twenty segments, 50% wrong
-  across two.
+  "Sustained" is load-bearing — the same segment had a lone `0.037` blip at
+  `t=0` with silence either side, which an instantaneous threshold would have
+  believed.
+
+- `skip_dead_air` and `dead_air_cap` (120 s). A failed detection returns 0 and
+  degrades to the previous behaviour; the cap means a print that genuinely
+  begins slowly loses at most two minutes rather than its whole opening.
+
+Only the head needs this. At one frame per ~9 seconds the body already renders
+half a minute of idling as three frames.
 
 Older series are archived under `docs/changelog/`.
