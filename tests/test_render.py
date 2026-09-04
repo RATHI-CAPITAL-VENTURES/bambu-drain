@@ -185,6 +185,7 @@ class TestBookends(unittest.TestCase):
         with mock.patch.object(render, "_encode", side_effect=fake_encode), \
              mock.patch.object(render, "count_keyframes", return_value=700), \
              mock.patch.object(render, "available", return_value=True), \
+             mock.patch.object(render, "motion_start", return_value=0.0), \
              mock.patch.object(render.subprocess, "run") as sub:
             sub.return_value = mock.Mock(returncode=0, stderr="")
             # concat writes the final file; emulate it
@@ -229,3 +230,96 @@ class TestBookends(unittest.TestCase):
     def test_the_output_still_exists_with_bookends_off(self):
         self._run(head=0, tail=0)
         self.assertTrue(self.out.exists())
+
+
+class TestMotionStart(unittest.TestCase):
+    """Finding where printing actually begins.
+
+    From a real first segment: seconds 1-5 scored 0.000 (the printer parked),
+    sustained motion began around 29s, the purge showed up around 41-49s. There
+    was also a lone 0.037 blip at t=0 with silence either side — which an
+    instantaneous threshold would have believed.
+    """
+
+    def _scores(self, values):
+        out = "".join(f"scene_score={v}\n" for v in values)
+        return mock.Mock(returncode=0, stdout=out, stderr="")
+
+    def _detect(self, values, **kw):
+        with mock.patch.object(render.subprocess, "run", return_value=self._scores(values)):
+            return render.motion_start(Path("x.mp4"), **kw)
+
+    def test_the_real_shape_lands_at_the_sustained_motion(self):
+        # 0.037 blip, then five still seconds, then sustained movement.
+        vals = [0.037, 0, 0, 0, 0, 0] + [0.03] * 10
+        self.assertEqual(self._detect(vals), 6.0)
+
+    def test_a_lone_blip_is_not_mistaken_for_the_start(self):
+        vals = [0.0, 0.5, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+        self.assertEqual(self._detect(vals), 0.0, "one frame is not sustained motion")
+
+    def test_motion_from_the_very_start_means_no_skip(self):
+        self.assertEqual(self._detect([0.05] * 10), 0.0)
+
+    def test_a_still_recording_skips_nothing(self):
+        self.assertEqual(self._detect([0.0] * 30), 0.0)
+
+    def test_the_cap_bounds_a_late_detection(self):
+        # A print that genuinely starts slowly must lose at most `cap`.
+        vals = [0.0] * 200 + [0.05] * 10
+        self.assertLessEqual(self._detect(vals, cap=120.0), 120.0)
+
+    def test_no_output_at_all_degrades_to_zero(self):
+        with mock.patch.object(render.subprocess, "run",
+                               return_value=mock.Mock(returncode=1, stdout="", stderr="")):
+            self.assertEqual(render.motion_start(Path("x.mp4")), 0.0)
+
+    def test_sustain_length_is_respected(self):
+        vals = [0.0, 0.05, 0.05, 0.0, 0.0, 0.05, 0.05, 0.05, 0.05]
+        self.assertEqual(self._detect(vals, sustain=4), 5.0)
+
+
+class TestHeadOffsetIsApplied(unittest.TestCase):
+    def setUp(self):
+        self.tmp = TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.segs = []
+        for i in range(3):
+            p = self.root / f"ipcam-record.x.{i}.mp4"
+            p.write_bytes(b"x" * 100)
+            self.segs.append(p)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _head_args(self, skip, detected=29.0):
+        calls = []
+
+        def fake_encode(args, out, fps, crf):
+            calls.append(args)
+            Path(out).write_bytes(b"y" * 10)
+            return True
+
+        with mock.patch.object(render, "_encode", side_effect=fake_encode), \
+             mock.patch.object(render, "count_keyframes", return_value=700), \
+             mock.patch.object(render, "available", return_value=True), \
+             mock.patch.object(render, "motion_start", return_value=detected), \
+             mock.patch.object(render.subprocess, "run") as sub:
+            def _c(cmd, **kw):
+                Path(cmd[-1]).write_bytes(b"z")
+                return mock.Mock(returncode=0, stderr="")
+            sub.side_effect = _c
+            render.render(self.segs, self.root / "o.mp4", 60.0, 30, 23, 5.0, 5.0,
+                          skip_dead_air=skip)
+        return calls[0]
+
+    def test_the_head_seeks_past_the_dead_air(self):
+        args = self._head_args(skip=True)
+        self.assertIn("-ss", args)
+        self.assertEqual(args[args.index("-ss") + 1], "29.0")
+
+    def test_it_can_be_switched_off(self):
+        self.assertNotIn("-ss", self._head_args(skip=False))
+
+    def test_a_zero_detection_adds_no_seek(self):
+        self.assertNotIn("-ss", self._head_args(skip=True, detected=0.0))
