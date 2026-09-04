@@ -31,7 +31,33 @@ class TestPlan(unittest.TestCase):
 
     def test_a_44_hour_print_lands_near_60_seconds(self):
         every, frames = self._plan(21, 774)
-        self.assertAlmostEqual(frames / 30, 60, delta=3)
+        self.assertAlmostEqual(frames / 30, 60, delta=4)
+
+    def test_the_last_segment_is_not_counted_as_full(self):
+        """A print's final segment is short — that is how the end is detected.
+
+        Counting it as full over-estimated the total and the body came out
+        short. Negligible over twenty segments, 50% wrong over two.
+        """
+        many, _ = self._plan(20, 774)
+        few, _ = self._plan(2, 774)
+        self.assertGreater(many, few, "more footage must sample more sparsely")
+
+        # The estimate must not treat the short final segment as full: two
+        # segments hold ~1161 keyframes, not 1548.
+        _, frames_two = self._plan(2, 774)
+        self.assertLess(frames_two, 774 * 2)
+        self.assertAlmostEqual(frames_two, 774 * 1.5, delta=60)
+
+    def test_short_footage_is_not_padded_to_the_target(self):
+        """Two segments cannot make 60s at 30fps — 1161 keyframes is 38.7s.
+
+        Sampling every keyframe is the floor; the output is however long the
+        footage allows rather than the length requested.
+        """
+        every, frames = self._plan(2, 774)
+        self.assertEqual(every, 1, "must not skip frames when footage is scarce")
+        self.assertLess(frames / 30, 60)
 
     def test_it_samples_roughly_every_ninth_keyframe(self):
         every, _ = self._plan(21, 774)
@@ -124,3 +150,82 @@ class TestRenderGuards(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestBookends(unittest.TestCase):
+    """Real-time clips at each end.
+
+    At one frame per ~9 seconds of print, the first minute — levelling, purge,
+    first layer — lasts about 0.2 seconds and is effectively invisible. Same at
+    the end. The bookends play those at normal speed.
+    """
+
+    def setUp(self):
+        self.tmp = TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.segs = []
+        for i in range(3):
+            p = self.root / f"ipcam-record.x.{i}.mp4"
+            p.write_bytes(b"x" * 100)
+            self.segs.append(p)
+        self.out = self.root / "out.mp4"
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _run(self, head=5.0, tail=5.0):
+        """Capture the ffmpeg argument lists each encode pass would use."""
+        calls = []
+
+        def fake_encode(args, out, fps, crf):
+            calls.append(args)
+            Path(out).write_bytes(b"y" * 10)
+            return True
+
+        with mock.patch.object(render, "_encode", side_effect=fake_encode), \
+             mock.patch.object(render, "count_keyframes", return_value=700), \
+             mock.patch.object(render, "available", return_value=True), \
+             mock.patch.object(render.subprocess, "run") as sub:
+            sub.return_value = mock.Mock(returncode=0, stderr="")
+            # concat writes the final file; emulate it
+            def _concat(cmd, **kw):
+                Path(cmd[-1]).write_bytes(b"z" * 10)
+                return mock.Mock(returncode=0, stderr="")
+            sub.side_effect = _concat
+            render.render(self.segs, self.out, 60.0, 30, 23, head, tail)
+        return calls
+
+    def test_three_passes_head_body_tail(self):
+        calls = self._run()
+        self.assertEqual(len(calls), 3)
+
+    def test_the_head_comes_from_the_first_segment(self):
+        head = self._run()[0]
+        self.assertIn(str(self.segs[0]), head)
+        self.assertIn("-t", head)
+
+    def test_the_tail_comes_from_the_LAST_segment(self):
+        tail = self._run()[2]
+        self.assertIn(str(self.segs[-1]), tail)
+        self.assertIn("-sseof", tail)
+
+    def test_the_tail_seeks_from_the_end_not_the_start(self):
+        tail = self._run(tail=5.0)[2]
+        self.assertEqual(tail[tail.index("-sseof") + 1], "-5.0")
+
+    def test_the_body_decodes_keyframes_only(self):
+        body = self._run()[1]
+        self.assertIn("-skip_frame", body)
+        self.assertEqual(body[body.index("-skip_frame") + 1], "nokey")
+
+    def test_bookends_can_be_switched_off(self):
+        self.assertEqual(len(self._run(head=0, tail=0)), 1)
+
+    def test_head_only(self):
+        calls = self._run(head=5.0, tail=0)
+        self.assertEqual(len(calls), 2)
+        self.assertIn("-t", calls[0])
+
+    def test_the_output_still_exists_with_bookends_off(self):
+        self._run(head=0, tail=0)
+        self.assertTrue(self.out.exists())
