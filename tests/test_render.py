@@ -323,3 +323,103 @@ class TestHeadOffsetIsApplied(unittest.TestCase):
 
     def test_a_zero_detection_adds_no_seek(self):
         self.assertNotIn("-ss", self._head_args(skip=True, detected=0.0))
+
+
+class TestFilesAreHeldUntilThePrintEnds(unittest.TestCase):
+    """Shipping mid-print destroys the ability to rebuild a timelapse.
+
+    Observed on a real 5.79 GB print: it took several drain passes, the ship
+    loop cleared staging between them, and by the time the final short segment
+    closed the session only ONE segment remained staged — below min_segments, so
+    the render was skipped and the print got no timelapse.
+
+    Every print large enough to need more than one drain pass failed this way.
+    """
+
+    def setUp(self):
+        self.tmp = TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.led = Ledger(self.root / "l.db")
+
+    def tearDown(self):
+        self.led.close()
+        self.tmp.cleanup()
+
+    def _add(self, sha, session, ends=False):
+        # A realistic mtime: the hold timeout treats an epoch-1970 timestamp as
+        # an abandoned session and ships it, which is correct behaviour and made
+        # the first version of these tests meaningless.
+        import time as _t
+        p = self.root / f"{sha}.mp4"
+        p.write_bytes(b"x")
+        self.led.record_drained(sha, "ipcam-record.x.mp4", f"prints/{session}/video/{sha}.mp4",
+                                1, p, session=session, src_mtime=_t.time(),
+                                ends_session=ends)
+
+    def test_an_open_session_is_held_back(self):
+        self._add("a", "S")
+        self._add("b", "S")
+        self.assertEqual(len(self.led.unshipped()), 2, "all files are pending")
+        self.assertEqual(self.led.unshipped(only_closed_sessions=True), [],
+                         "but none may ship while the print is running")
+
+    def test_they_ship_once_the_session_closes(self):
+        self._add("a", "S")
+        self._add("b", "S")
+        self._add("c", "S", ends=True)
+        self.assertEqual(len(self.led.unshipped(only_closed_sessions=True)), 3)
+
+    def test_files_with_no_session_are_never_held(self):
+        import time as _t
+        self.led.record_drained("m", "model.3mf", "models/2026/09/model.3mf", 1,
+                                self.root / "m", session=None, src_mtime=_t.time())
+        self.assertEqual(len(self.led.unshipped(only_closed_sessions=True)), 1)
+
+    def test_a_closed_session_does_not_hold_an_open_one(self):
+        self._add("a", "DONE", ends=True)
+        self._add("b", "RUNNING")
+        rows = self.led.unshipped(only_closed_sessions=True)
+        self.assertEqual([r["session"] for r in rows], ["DONE"])
+
+    def test_open_sessions_are_reported(self):
+        self._add("a", "RUNNING")
+        self._add("b", "DONE", ends=True)
+        self.assertEqual(self.led.open_sessions(), ["RUNNING"])
+
+    def test_the_real_failure_cannot_recur(self):
+        """25 segments across several drain passes, closing on the last."""
+        for i in range(24):
+            self._add(f"s{i}", "BIG")
+            # Mid-print: nothing from this session may ship yet.
+            self.assertEqual(self.led.unshipped(only_closed_sessions=True), [],
+                             f"shipped after {i + 1} segments — render would fail")
+        self._add("s24", "BIG", ends=True)
+        self.assertEqual(len(self.led.unshipped(only_closed_sessions=True)), 25)
+        # And all 25 are still staged, so a render has its raw material.
+        self.assertEqual(len(self.led.staged_segments("BIG")), 25)
+
+    def test_a_session_that_never_closes_is_eventually_shipped(self):
+        """A wedged session must not hold everything behind it forever.
+
+        A printer switched off mid-print, or a final segment that happens to
+        come in full-size, would otherwise hold its files until staging filled
+        and the drain loop stopped — turning a missing timelapse into a stopped
+        system.
+        """
+        import time as _t
+        p = self.root / "old.mp4"
+        p.write_bytes(b"x")
+        self.led.record_drained("old", "ipcam-record.x.mp4", "prints/OLD/video/a.mp4",
+                                1, p, session="OLD", src_mtime=_t.time() - 8 * 3600)
+        rows = self.led.unshipped(only_closed_sessions=True, max_hold_seconds=6 * 3600)
+        self.assertEqual(len(rows), 1, "8h old and unclosed — must ship anyway")
+
+    def test_a_recent_open_session_is_still_held(self):
+        import time as _t
+        p = self.root / "new.mp4"
+        p.write_bytes(b"x")
+        self.led.record_drained("new", "ipcam-record.x.mp4", "prints/NEW/video/a.mp4",
+                                1, p, session="NEW", src_mtime=_t.time() - 600)
+        self.assertEqual(
+            self.led.unshipped(only_closed_sessions=True, max_hold_seconds=6 * 3600), [])
+        self.assertEqual(self.led.open_sessions(6 * 3600), ["NEW"])

@@ -155,6 +155,35 @@ local copy's size against the ledger *before* touching the network, and reports
 a truncated staged file as unrecoverable local loss rather than retrying against
 the remote forever.
 
+## A print's files are held until it ends
+
+Loop B does not ship a session's files while that print is still running.
+
+This is not tidiness — it is what makes rebuilding a missing timelapse possible
+at all. **Shipping deletes the staged segments, and the segments are the raw
+material.** Ship them mid-print and there is nothing left to render from.
+
+That was not obvious, and it shipped broken. A 5.79 GB print takes several drain
+passes; the ship loop ran between them, saw a session that had not closed yet,
+shipped what was staged and cleared it. By the time the final short segment
+closed the session, exactly one segment remained — below `min_segments` — so the
+render was skipped silently. **Every print large enough to need more than one
+pass lost its timelapse.** The ones that worked were small enough to drain in a
+single pass, which made the feature look correct.
+
+### And the wedge that fix would have created
+
+Holding files introduces a new way to stop the system: a print that never closes
+— the printer switched off mid-run, or a final segment that happens to arrive
+full-size — would hold its files *and everything queued behind them* until
+staging hit its budget and the drain loop stopped.
+
+`max_hold_hours` (6) ships such a session anyway, without a rebuilt timelapse.
+Losing a timelapse is a far better failure than a stopped drain, and the two
+guards compose: the hold protects the render, the timeout protects the pipeline.
+
+Files with no session — a sliced model, anything ungrouped — are never held.
+
 ## Ledger
 
 `ledger.db` (SQLite, WAL) keys on the file's SHA-256. `known()` gates every

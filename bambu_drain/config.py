@@ -109,6 +109,11 @@ class DrainConfig:
     # timelapse, followed soon after by another, will still merge — that is a
     # real limit, not an oversight.
     session_gap_minutes: float = 45.0
+    # A session's files are held until the print ends, so a rebuilt timelapse
+    # still has its segments. If a print never closes — printer switched off
+    # mid-run, or a final segment that happens to be full-size — ship it anyway
+    # after this long rather than holding it, and everything behind it, forever.
+    max_hold_hours: float = 6.0
     rules: tuple[Rule, ...] = ()
 
 
