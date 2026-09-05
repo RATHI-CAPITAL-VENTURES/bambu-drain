@@ -156,7 +156,16 @@ class Shipper:
 
     def _run_once_locked(self) -> dict:
         self.render_missing()
-        pending = self.ledger.unshipped()
+        # Hold a session's files until the print has ended. Shipping deletes the
+        # staged segments, and a missing timelapse is rebuilt FROM those
+        # segments — ship them mid-print and there is nothing left to render.
+        hold = self.cfg.drain.max_hold_hours * 3600
+        held = self.ledger.open_sessions(hold)
+        if held:
+            log.info("holding %d unfinished session(s): %s",
+                     len(held), ", ".join(held))
+        pending = self.ledger.unshipped(only_closed_sessions=True,
+                                        max_hold_seconds=hold)
         if not pending:
             return {"shipped": 0, "bytes": 0, "pending": 0}
 

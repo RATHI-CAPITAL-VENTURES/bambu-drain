@@ -152,12 +152,50 @@ class Ledger:
 
     # -- ship side ---------------------------------------------------------
 
-    def unshipped(self) -> list[sqlite3.Row]:
-        return list(
-            self.db.execute(
-                "SELECT * FROM files WHERE shipped_at IS NULL ORDER BY drained_at"
-            )
-        )
+    def unshipped(self, only_closed_sessions: bool = False,
+                  max_hold_seconds: float = 6 * 3600) -> list[sqlite3.Row]:
+        """Files not yet on the ship host.
+
+        With `only_closed_sessions`, a session's files are held back until that
+        session has ended. Shipping deletes the staged segments, and they are
+        the raw material for rebuilding a missing timelapse — so shipping them
+        mid-print destroys the ability to render one.
+
+        This is not hypothetical: a 5.79 GB print took several drain passes, the
+        ship loop cleared staging between them, and by the time the final short
+        segment closed the session only one segment remained. Every print large
+        enough to need more than one pass silently lost its timelapse.
+
+        Files with no session (a sliced model, anything ungrouped) are never
+        held.
+        """
+        if not only_closed_sessions:
+            return list(self.db.execute(
+                "SELECT * FROM files WHERE shipped_at IS NULL ORDER BY drained_at"))
+        # A session that never closes must not wedge the pipeline. A printer
+        # switched off mid-print, or a final segment that happens to come in
+        # full-size, would otherwise hold its files — and every file behind
+        # them — indefinitely, until staging filled and the drain loop stopped.
+        # After max_hold_seconds of no new files, ship it anyway and accept
+        # that it gets no rebuilt timelapse.
+        cutoff = time.time() - max_hold_seconds
+        return list(self.db.execute(
+            "SELECT * FROM files WHERE shipped_at IS NULL AND ("
+            "  session IS NULL OR session IN ("
+            "    SELECT session FROM files WHERE session IS NOT NULL"
+            "    GROUP BY session"
+            "    HAVING MAX(ends_session) = 1"
+            "        OR MAX(COALESCE(src_mtime, drained_at)) < ?))"
+            " ORDER BY drained_at", (cutoff,)))
+
+    def open_sessions(self, max_hold_seconds: float = 6 * 3600) -> list[str]:
+        """Sessions still being held: not ended, and not yet timed out."""
+        cutoff = time.time() - max_hold_seconds
+        return [r["session"] for r in self.db.execute(
+            "SELECT session FROM files WHERE session IS NOT NULL "
+            "AND shipped_at IS NULL GROUP BY session "
+            "HAVING MAX(ends_session) = 0 "
+            "   AND MAX(COALESCE(src_mtime, drained_at)) >= ?", (cutoff,))]
 
     def record_shipped(self, sha: str, verified: bool) -> None:
         now = time.time()
