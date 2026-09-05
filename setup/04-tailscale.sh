@@ -56,6 +56,10 @@ PI_IP="$(ssh -n "$PI" "tailscale ip -4" | head -1)"
 say "Pi is on the tailnet as $PI_TS ($PI_IP)"
 
 say "pointing the Pi at the Mac's TAILNET name (was mDNS, which moved)"
+# SC2087: the expansion is deliberately CLIENT side. The Mac's tailnet name, its
+# username and the Pi's username are all known here and meaningless on the Pi, so
+# the heredoc must be interpolated before it is sent.
+# shellcheck disable=SC2087
 ssh -n "$PI" "sudo tee /etc/ssh/ssh_config.d/10-bambu-drain.conf >/dev/null" <<CONF
 # The ship loop runs as root, so this must be system-wide — a Host block in a
 # user's ~/.ssh/config is invisible to it.
@@ -91,11 +95,23 @@ print(f"  rewrote Host {alias} -> {ts_name}")
 PY
 
 say "verifying both directions over Tailscale"
-ssh -o ConnectTimeout=15 "$PI" "true" && say "Mac -> Pi OK"
-ssh -n "$PI" "sudo ssh -o BatchMode=yes -o ConnectTimeout=15 ${MAC_ALIAS} true" \
-  && say "Pi -> Mac OK (as root, which is how the ship loop does it)" \
-  || { echo "error: the Pi still cannot reach the Mac." >&2
-       echo "       Is Tailscale running and signed in on the Mac?" >&2; exit 1; }
+if ssh -o ConnectTimeout=15 "$PI" "true"; then
+  say "Mac -> Pi OK"
+else
+  echo "error: the Mac cannot reach the Pi over Tailscale." >&2
+  exit 1
+fi
+
+# An explicit if, not `A && B || C`: that form runs C whenever B fails too, so a
+# hiccup in the success message would report the connection as broken.
+# shellcheck disable=SC2029
+if ssh -n "$PI" "sudo ssh -o BatchMode=yes -o ConnectTimeout=15 ${MAC_ALIAS} true"; then
+  say "Pi -> Mac OK (as root, which is how the ship loop does it)"
+else
+  echo "error: the Pi still cannot reach the Mac." >&2
+  echo "       Is Tailscale running and signed in on the Mac?" >&2
+  exit 1
+fi
 
 cat <<MSG
 

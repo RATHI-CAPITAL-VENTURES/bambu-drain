@@ -4,7 +4,7 @@
 PY ?= python3
 BASE ?= origin/main
 
-.PHONY: test guards changelog-archive
+.PHONY: test guards changelog-archive lint
 
 test:
 	$(PY) -m unittest discover -s tests -t . -v
@@ -12,6 +12,11 @@ test:
 # PR_TITLE is passed through so the pr-title guard actually runs locally.
 # Without it the guard prints "skipping" and is green here while failing in CI —
 # which is how this PR got to merge time with a bad title.
+# CI runs shellcheck and it is not otherwise obvious that it will. Two PRs have
+# now been rejected for findings that `make lint` would have caught in a second.
+lint:
+	shellcheck setup/*.sh
+
 guards:
 	BASE_SHA=$$(git merge-base HEAD $(BASE)) \
 	HEAD_SHA=$$(git rev-parse HEAD) \
