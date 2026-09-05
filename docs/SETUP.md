@@ -191,6 +191,10 @@ EOF
 
 > **Use the Mac's mDNS `.local` name, not its IP.** The IP is a DHCP lease and
 > will move — it moved during this project's own setup.
+>
+> Better still, **put both machines on a Tailscale tailnet** and skip LAN
+> addressing entirely — see Part 3b. The mDNS name is only stable while both
+> machines share a network, and its cache goes stale when the lease moves.
 
 Verify both:
 
@@ -198,6 +202,36 @@ Verify both:
 ssh rpi 'true'                                  # Mac → Pi
 ssh rpi 'sudo ssh -o BatchMode=yes ishan-mac hostname'   # Pi → Mac, AS ROOT
 ```
+
+## Part 3b — Tailscale (recommended)
+
+Everything above pins the two machines to a shared LAN, and that assumption
+breaks in two ways this project has hit repeatedly:
+
+- The Mac's DHCP lease moves, the Pi's mDNS cache holds the old address, and
+  shipping fails with **"no route to host"** — which reads like the Mac being
+  switched off. Seen three times in two days.
+- The Mac joins a **different network entirely**, at which point the LAN name
+  resolves to nothing and the Pi cannot reach it at all.
+
+Tailscale gives both machines a name and a `100.x` address that never change,
+work from anywhere, and are encrypted end to end.
+
+```sh
+# FROM THE MAC, while both are still on the same network — this is the last
+# time that has to be true.
+setup/04-tailscale.sh rpi <your-mac-tailnet-name> ishan-mac
+```
+
+Find the Mac's tailnet name with `tailscale status --json | grep DNSName`, or in
+the Tailscale menu bar app. The script installs Tailscale on the Pi, prompts you
+to authenticate in a browser, rewrites **both** SSH configs to use tailnet names,
+and verifies each direction — including Pi → Mac *as root*, which is how the ship
+loop connects.
+
+After it runs, neither machine depends on the other's network. The Pi keeps
+draining the printer wherever it is and ships whenever the Mac is **on**, rather
+than whenever the Mac is on this particular Wi-Fi.
 
 ### Passwordless sudo on the Pi (optional but convenient)
 

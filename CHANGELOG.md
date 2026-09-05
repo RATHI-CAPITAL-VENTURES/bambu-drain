@@ -4,6 +4,26 @@
 header equals `VERSION`, is new relative to the base branch, and increases
 monotonically. A MINOR bump is a milestone and must ship a retro.
 
+## 0.9.2 — 2026-09-05
+
+### Added
+
+- **`setup/04-tailscale.sh`** — put both machines on a tailnet and stop
+  depending on a shared LAN.
+
+  The LAN assumption has broken twice in different ways. The Mac's DHCP lease
+  moves and the Pi's mDNS cache holds the old address, surfacing as "no route to
+  host" — three times in two days. And the Mac joining a **different network**
+  breaks it outright: the Pi cannot ship, and the Mac cannot reach the Pi at its
+  hardcoded LAN address either.
+
+  A tailnet name does not move, works off-LAN, and is encrypted. The script
+  rewrites **both** SSH configs and verifies each direction, including Pi → Mac
+  as root, which is how the ship loop actually connects.
+
+  It must be run from the same network as the Pi — the last time that has to be
+  true.
+
 ## 0.9.1 — 2026-09-04
 
 ### Fixed
