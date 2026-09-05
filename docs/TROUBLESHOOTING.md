@@ -171,6 +171,11 @@ ssh rpi 'sudo systemctl restart avahi-daemon'
 Using the `.local` name rather than an IP is still correct — the address moved
 three times during this project's first two days. The cache just needs a nudge.
 
+**If this keeps happening, or the Mac leaves the network entirely**, move both
+machines onto a Tailscale tailnet: `setup/04-tailscale.sh`. A tailnet name does
+not move, works off-LAN, and removes this failure mode rather than papering over
+it. See [SETUP Part 3b](SETUP.md#part-3b--tailscale-recommended).
+
 ## Under-voltage
 
 ```sh
