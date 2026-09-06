@@ -4,6 +4,20 @@
 header equals `VERSION`, is new relative to the base branch, and increases
 monotonically. A MINOR bump is a milestone and must ship a retro.
 
+## 0.9.3 — 2026-09-05
+
+### Fixed
+
+- **A data-integrity problem is reported once, not once a minute.**
+  `health.problems()` rendered `"data integrity event {N}m ago"`. That string
+  feeds RIA's `watch` job, which notifies when it CHANGES — and N grows every
+  minute, so one incident became an hour of notifications. The elapsed time is
+  gone from the verdict; it remains in the status payload and in the human
+  output. A test asserts the verdict is identical at 2 minutes and at 30.
+
+  Stability was already tested on the healthy path. It was not tested on the
+  alarm path, which is the only path anyone is woken by.
+
 ## 0.9.2 — 2026-09-05
 
 ### Added
