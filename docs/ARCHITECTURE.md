@@ -490,6 +490,31 @@ Minute granularity means two sessions starting in the same minute would collide,
 so `_distinct()` suffixes `-2`, `-3`. Unlikely, but a collision silently merges
 two prints, which is the thing this whole section exists to prevent.
 
+## The health verdict is an alarm, so it must not move
+
+`health.verdict()` returns one line — `ok`, or `PROBLEM: …`. RIA consumes it as
+a `watch` job, which notifies **when the string changes**. That makes the
+verdict an alarm rather than a report, and it carries an unusual constraint:
+
+> Nothing that moves on its own may appear in it.
+
+Not file counts, not bytes archived, not idle seconds, and — the one that got
+through — **not how long the problem has been going on**. `problems()` rendered
+`data integrity event {N}m ago`, so a single incident emitted a different string
+every minute, and RIA read each one as a new problem to report. The Mac-side
+reader had the identical bug on its staleness branch and texted every fifteen
+minutes, overnight, about one unreachable Pi (v0.9.3, RIA v2.41.5).
+
+**Why the tests missed it.** Verdict stability was tested — on the healthy path.
+That turns out to prove nothing. A `watch` checker is only ever compared against
+itself, so a constant `ok` says nothing about the string emitted once something
+is wrong, and the wrong-path string is the only one anybody is ever woken by.
+The tests now pin a *problem* verdict as byte-identical at 2 minutes and at 30.
+
+Elapsed time is not lost — it stays in the status payload and in the human
+output, both of which are read on demand and neither of which is a change
+detector. A number is fine in a report and dangerous in an alarm.
+
 ## Known gaps
 
 - **The 4 GB question is open.** exFAT is the default and has no per-file limit.
