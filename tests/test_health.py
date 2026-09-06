@@ -112,7 +112,15 @@ class TestEventsExpire(unittest.TestCase):
     def test_a_fresh_event_alarms(self):
         v = health.verdict(self._payload(120))
         self.assertIn("data integrity", v)
-        self.assertIn("2m ago", v)
+
+    def test_the_verdict_does_not_change_as_the_event_ages(self):
+        """A growing counter in the verdict re-fires the watch every check.
+
+        This shipped: RIA notified every fifteen minutes about one incident,
+        because the elapsed minutes were part of the string it compares.
+        """
+        self.assertEqual(health.verdict(self._payload(120)),
+                         health.verdict(self._payload(1800)))
 
     def test_an_old_event_does_not(self):
         self.assertEqual(health.problems(self._payload(7200)), [])

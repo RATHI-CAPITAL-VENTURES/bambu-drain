@@ -85,9 +85,11 @@ def problems(payload: dict) -> list[str]:
         age = now - ev.get("ts", 0)
         if age > EVENT_WINDOW_SECONDS:
             continue
-        out.append(
-            f"data integrity event {int(age / 60)}m ago: {ev['kind']} — {ev['detail']}"
-        )
+        # NO elapsed time in the verdict. It drives a change-detecting watch,
+        # and a counter that grows makes the string differ on every check —
+        # which turns one incident into a notification every fifteen minutes.
+        # The age belongs in the human output, which is not a change detector.
+        out.append(f"data integrity event: {ev['kind']} — {ev['detail']}")
         break
 
     if a.get("files_pending_ship", 0) and not payload.get("ship_reachable", True):
