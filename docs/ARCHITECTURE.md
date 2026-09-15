@@ -244,7 +244,7 @@ cannot wedge the daemon out of its own lock.
 broken ship loop would trade the printer's full disk for the Pi's — a strictly
 worse failure, because the Pi is also the thing that fixes it.
 
-## Two environment traps, found on real hardware
+## Environment traps, found on real hardware
 
 Both were found during the first install and both are the same shape: a check
 that *looks* like it passed.
@@ -288,8 +288,33 @@ The drain loop needs configfs and `mount`. A `Host` block in the login user's
 unreachable — which reads like a network fault. The alias belongs in
 `/etc/ssh/ssh_config.d/`, defined once.
 
-Related: point it at the Mac's mDNS `.local` name, not its IP. The Mac's
-address moved during this project's own setup.
+Related: point it at a name that does not move. It was the Mac's mDNS
+`.local` name until v0.9.2 (the IP is a DHCP lease and moved during this
+project's own setup); since 2026-09-15 it is the Mac's **tailnet** name, which
+also survives the Mac changing networks. `ship.py`'s `reachable()` still
+restarts `avahi-daemon` once before giving up — harmless on a tailnet, and the
+right nudge for anyone still on Part 3 alone.
+
+### `ssh -n` and a heredoc: an empty file, silently
+
+`ssh -n host 'sudo tee file' <<EOF` looks like a remote write and is not one.
+`-n` is "stdin from `/dev/null`", so the heredoc never leaves the client and
+`tee` truncates the target to nothing. The Tailscale setup script did exactly
+this to the Pi's system-wide `ishan-mac` alias on its first real run — the
+failure that would have followed is the one this whole section is about, "the
+Mac is unreachable", with no network fault behind it. The rule is: `-n` only
+on a command with no input, and read back anything a heredoc was meant to write.
+
+### Tailscale SSH takes port 22, and check mode refuses BatchMode
+
+`tailscale up --ssh` was in the script for convenience. It makes Tailscale
+answer port 22 on the tailnet address instead of sshd, and the default ACL runs
+it in *check mode*: every session must be re-approved in a browser. A `BatchMode`
+client sees the auth URL and times out, so the script's own Mac → Pi
+verification could never pass, and neither could any unattended admin over the
+tailnet. The key-based sshd the loops already use is the right transport; the
+tailnet only changes the address it is reached at. Rejected, and the script
+clears the flag on a Pi that was brought up with it.
 
 ## What the P2S actually writes
 

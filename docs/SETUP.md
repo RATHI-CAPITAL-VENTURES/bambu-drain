@@ -233,6 +233,27 @@ After it runs, neither machine depends on the other's network. The Pi keeps
 draining the printer wherever it is and ships whenever the Mac is **on**, rather
 than whenever the Mac is on this particular Wi-Fi.
 
+Three things the first real run settled (v0.9.4), in case you do any of this by
+hand:
+
+- **Do not enable Tailscale SSH on the Pi** (`tailscale up --ssh`). It takes
+  over port 22 on the tailnet address, and the default ACL runs it in *check
+  mode* — every session wants a fresh browser login, which `BatchMode` refuses.
+  You would see `To authenticate, visit: https://login.tailscale.com/a/…` and
+  then a timeout. Ordinary sshd with the key you already copied is what the
+  loops need. If a Pi was brought up with it: `sudo tailscale set --ssh=false`.
+- **`ssh -n` silences a heredoc.** `ssh -n rpi 'sudo tee file' <<EOF` writes an
+  *empty* file — `-n` is stdin from `/dev/null`. Drop the `-n` when the heredoc
+  is the input, and read the file back.
+- **Pin the Pi's host key under its new name** before the first tailnet
+  connection; the script copies it from `/etc/ssh/ssh_host_ed25519_key.pub`
+  over the LAN. Otherwise the first `BatchMode` connection fails with
+  `Host key verification failed`, which reads like a network fault.
+
+Once both machines are on the tailnet, the Pi's ship target resolves through
+MagicDNS (`getent hosts <mac-tailnet-name>` on the Pi returns a `100.x`
+address), and the `.local` / `avahi` advice in Part 3 no longer applies.
+
 ### Passwordless sudo on the Pi (optional but convenient)
 
 Every operation needs root. Without this you will type a password constantly:
