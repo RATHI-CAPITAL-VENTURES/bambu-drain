@@ -174,7 +174,24 @@ three times during this project's first two days. The cache just needs a nudge.
 **If this keeps happening, or the Mac leaves the network entirely**, move both
 machines onto a Tailscale tailnet: `setup/04-tailscale.sh`. A tailnet name does
 not move, works off-LAN, and removes this failure mode rather than papering over
-it. See [SETUP Part 3b](SETUP.md#part-3b--tailscale-recommended).
+it. See [SETUP Part 3b](SETUP.md#part-3b--tailscale-recommended). This
+project's own Pi has been on the tailnet since 2026-09-15; if yours is, the
+`.local` check above is the wrong one — use
+`ssh rpi 'getent hosts <mac-tailnet-name>'` and `tailscale status` on both ends.
+
+## Over Tailscale: `Host key verification failed`, or a login URL then a timeout
+
+Two first-contact failures, both from the v0.9.4 script's first real run:
+
+- **`Host key verification failed`** on `ssh rpi` right after the switch: the
+  Pi's tailnet name is new to `~/.ssh/known_hosts` and `BatchMode` will not add
+  it. The script pins the key for you; by hand, copy
+  `ssh rpi 'cat /etc/ssh/ssh_host_ed25519_key.pub'` (over a connection you
+  already trust) into `known_hosts` under the tailnet name.
+- **`To authenticate, visit: https://login.tailscale.com/a/…` then
+  `Connection … timed out`**: Tailscale SSH is on and its check mode wants a
+  browser. `ssh rpi 'sudo tailscale set --ssh=false'` (via the LAN address if
+  the tailnet one is what is failing) and try again.
 
 ## Under-voltage
 

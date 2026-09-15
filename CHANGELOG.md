@@ -4,6 +4,36 @@
 header equals `VERSION`, is new relative to the base branch, and increases
 monotonically. A MINOR bump is a milestone and must ship a retro.
 
+## 0.9.4 — 2026-09-15
+
+### Fixed
+
+- **`setup/04-tailscale.sh` was shipped tested for syntax only, and its first
+  real run found three bugs — each fatal for the next person too.**
+
+  1. **`ssh -n host 'tee file' <<EOF` writes an empty file.** `-n` sets stdin
+     to `/dev/null`, so the heredoc never leaves the Mac and `tee` truncates
+     the target. The script wiped the Pi's `ishan-mac` alias that way, which
+     would have surfaced later as "the Mac is unreachable". The write now goes
+     through a plain `ssh` and is **read back** before the script continues.
+  2. **`tailscale up --ssh` broke Mac → Pi.** Tailscale SSH takes over port 22
+     on the tailnet address, and the default ACL runs it in *check mode*:
+     every session demands a fresh browser login, which `BatchMode` refuses.
+     The verification hung at "To authenticate, visit …". The flag is gone,
+     `tailscale set --ssh=false` clears it on a Pi that had it, and the
+     tailnet carries the ordinary key-based sshd that already worked.
+  3. **The Pi's tailnet name was unknown to `known_hosts`**, so the first
+     `BatchMode` connection was refused with "Host key verification failed".
+     The host key is now read over the still-trusted LAN connection *before*
+     anything changes and pinned under the tailnet name and IP — not
+     trusted-on-first-use, since we already hold it.
+
+  Both verification steps now run with `BatchMode=yes`, because a check that
+  can prompt does not verify what the unattended loops will see.
+
+  Run for real on 2026-09-15: `bambu-drain-pi.tail755927.ts.net` ↔
+  `ishans-m2-macbook-pro`, both directions, Pi → Mac as root.
+
 ## 0.9.3 — 2026-09-05
 
 ### Fixed

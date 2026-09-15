@@ -18,6 +18,22 @@
 #
 # Tailscale gives both machines a name and a 100.x address that do not change,
 # work from anywhere, and are encrypted end to end.
+#
+# THREE THINGS THE FIRST REAL RUN TAUGHT (v0.9.4) — do not undo them:
+#
+#   1. `ssh -n` sets stdin to /dev/null, so `ssh -n host 'tee file' <<EOF`
+#      sends NOTHING and truncates the file to zero bytes. The first run wiped
+#      the Pi's ishan-mac alias that way. Every heredoc below goes through a
+#      plain `ssh`, and the write is read back and checked.
+#   2. NOT `tailscale up --ssh`. Tailscale SSH takes over port 22 on the tailnet
+#      address, and the default ACL runs it in "check mode": every session
+#      demands a fresh browser login. BatchMode refuses that, so Mac -> Pi
+#      verification hangs and any unattended admin over the tailnet is dead.
+#      Plain sshd with the existing key is what we want, and it already works.
+#   3. The Pi's host key is fetched over the still-trusted LAN connection and
+#      PINNED under its tailnet name before the first tailnet connection. The
+#      new name is otherwise unknown to known_hosts, BatchMode refuses it, and
+#      trusting-on-first-use a key you already hold is a downgrade.
 set -euo pipefail
 
 if [ $# -lt 2 ]; then
@@ -28,6 +44,7 @@ fi
 PI="$1"
 MAC_TS="$2"
 MAC_ALIAS="${3:-ishan-mac}"
+PI_HOSTNAME="bambu-drain-pi"
 
 say() { printf '\033[1m·\033[0m %s\n' "$*"; }
 
@@ -39,14 +56,23 @@ ssh -o BatchMode=yes -o ConnectTimeout=8 "$PI" true 2>/dev/null || {
 }
 PI_USER="$(ssh -n "$PI" 'whoami')"
 
+# Over the connection we already trust, before anything changes. Pinned under
+# the tailnet name further down.
+PI_HOST_KEY="$(ssh -n "$PI" 'cat /etc/ssh/ssh_host_ed25519_key.pub' | awk '{print $1, $2}')"
+[ -n "$PI_HOST_KEY" ] || { echo "error: could not read the Pi's host key." >&2; exit 1; }
+
 say "installing tailscale on the Pi"
 ssh -n "$PI" 'command -v tailscale >/dev/null || (curl -fsSL https://tailscale.com/install.sh | sudo sh)'
 
 say "bringing it up — AUTHENTICATE IN THE BROWSER WHEN THE URL APPEARS"
 echo
 # Not -n: this one is interactive, and the auth URL must reach your eyes.
-ssh -t "$PI" 'sudo tailscale up --ssh --hostname=bambu-drain-pi' || {
+# No --ssh: see note 2 at the top.
+ssh -t "$PI" "sudo tailscale up --hostname=${PI_HOSTNAME}" || {
   echo "error: 'tailscale up' did not complete." >&2; exit 1; }
+# A Pi that was brought up with --ssh on an earlier attempt keeps it until told
+# otherwise; `up` without the flag does not clear it.
+ssh -n "$PI" 'sudo tailscale set --ssh=false'
 echo
 
 PI_TS="$(ssh -n "$PI" 'tailscale status --json' | python3 -c '
@@ -56,11 +82,13 @@ PI_IP="$(ssh -n "$PI" "tailscale ip -4" | head -1)"
 say "Pi is on the tailnet as $PI_TS ($PI_IP)"
 
 say "pointing the Pi at the Mac's TAILNET name (was mDNS, which moved)"
+PI_CONF=/etc/ssh/ssh_config.d/10-bambu-drain.conf
 # SC2087: the expansion is deliberately CLIENT side. The Mac's tailnet name, its
 # username and the Pi's username are all known here and meaningless on the Pi, so
 # the heredoc must be interpolated before it is sent.
-# shellcheck disable=SC2087
-ssh -n "$PI" "sudo tee /etc/ssh/ssh_config.d/10-bambu-drain.conf >/dev/null" <<CONF
+# NOT `ssh -n`: the heredoc IS the stdin. See note 1 at the top.
+# shellcheck disable=SC2087,SC2029
+ssh "$PI" "sudo tee ${PI_CONF} >/dev/null" <<CONF
 # The ship loop runs as root, so this must be system-wide — a Host block in a
 # user's ~/.ssh/config is invisible to it.
 #
@@ -73,7 +101,29 @@ Host ${MAC_ALIAS}
   IdentitiesOnly yes
   StrictHostKeyChecking accept-new
 CONF
-ssh -n "$PI" "sudo chmod 644 /etc/ssh/ssh_config.d/10-bambu-drain.conf"
+ssh -n "$PI" "sudo chmod 644 ${PI_CONF}"
+# Read it back. An empty file here is exactly the failure note 1 describes, and
+# it must not be discovered later as "the Mac is unreachable".
+if ! ssh -n "$PI" "grep -q '^  HostName ${MAC_TS}\$' ${PI_CONF}"; then
+  echo "error: ${PI_CONF} on the Pi does not contain HostName ${MAC_TS}." >&2
+  echo "       The write did not land; the Pi's ${MAC_ALIAS} alias may now be empty." >&2
+  exit 1
+fi
+
+say "pinning the Pi's host key under its tailnet name"
+python3 - "$PI_TS" "$PI_IP" "$PI_HOST_KEY" <<'PY'
+import sys
+from pathlib import Path
+ts_name, ip, key = sys.argv[1], sys.argv[2], sys.argv[3]
+kh = Path.home() / ".ssh" / "known_hosts"
+lines = kh.read_text().splitlines() if kh.exists() else []
+# Drop any earlier line for these names, then add the one we fetched over LAN.
+lines = [l for l in lines if not (l.split(" ", 1)[0].split(",")[0] in (ts_name, ip))]
+lines.append(f"{ts_name},{ip} {key}")
+kh.write_text("\n".join(lines) + "\n")
+kh.chmod(0o600)
+print(f"  known_hosts: {ts_name},{ip} -> {key.split()[0]}")
+PY
 
 say "pointing the Mac at the Pi's tailnet name"
 python3 - "$PI" "$PI_TS" "$PI_USER" <<'PY'
@@ -95,7 +145,9 @@ print(f"  rewrote Host {alias} -> {ts_name}")
 PY
 
 say "verifying both directions over Tailscale"
-if ssh -o ConnectTimeout=15 "$PI" "true"; then
+# BatchMode on both: a verification that can prompt is not a verification of
+# what the unattended loops will see.
+if ssh -o BatchMode=yes -o ConnectTimeout=15 "$PI" "true"; then
   say "Mac -> Pi OK"
 else
   echo "error: the Mac cannot reach the Pi over Tailscale." >&2
