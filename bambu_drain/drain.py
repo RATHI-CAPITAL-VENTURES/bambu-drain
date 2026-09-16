@@ -116,11 +116,44 @@ def fsync_file_and_parent(path: Path) -> None:
         os.close(dfd)
 
 
-# A print's last segment and its timelapse are flushed together, and BOTH end
-# the session. Without this, whichever sorts first closes the print and the
-# other opens a spurious one-file session. Two closers this close together are
-# one print's teardown, not two prints.
-TEARDOWN_SECONDS = 120
+# A print's teardown is one flush. Measured on the real printer, in order and
+# to the hundredth of a second: the timelapse's thumbnail, the short final
+# segment, the timelapse's `_mini` thumbnail, the timelapse itself — 0.18 s
+# from first to last, and the two closers 0.08 s apart. Anything landing this
+# soon after a closer is part of that flush and joins the print it closed.
+#
+# Declared in 0.6.0 at 120 s and applied only in the archive migration — the
+# daemon never read it, and every print with a timelapse got a one-file folder
+# for it (`2026-09-16_0024/timelapse.mp4` beside a 4.4-hour print with none).
+# It is 30 s now, not 120, because the window is no longer closers-only: the
+# closest redo on record started 141 s after the short segment that ended the
+# failed attempt, and its first file is a thumbnail, not a closer.
+TEARDOWN_SECONDS = 30
+
+# The sliced file "lands ~15 minutes before the first segment" held for the
+# print that motivated `starts_session` and not for the next two, where the
+# chamber recording's first thumbnail was written 1-2 s BEFORE the .gcode.3mf.
+# Sorted by mtime, that thumbnail opened an unnamed session, the sliced file
+# opened the named one a second later, and the thumbnail sat alone for six
+# hours before shipping as a one-file folder. A nameless session that opened
+# this recently before a sliced file landed is that print's own recording, and
+# the sliced file takes it over — records, staged files and all.
+START_SKEW_SECONDS = 120
+
+_UNNAMED = re.compile(r"^\d{4}-\d{2}-\d{2}_\d{4}(-\d+)?$")
+
+
+def is_unnamed(session: str) -> bool:
+    """A session folder that carries only its timestamp — no model name."""
+    return bool(_UNNAMED.match(session))
+
+
+def reroot(dest_rel: str, old: str, new: str) -> str:
+    """`prints/<old>/…` -> `prints/<new>/…`; anything else unchanged."""
+    parts = dest_rel.split("/")
+    if len(parts) >= 2 and parts[0] == "prints" and parts[1] == old:
+        parts[1] = new
+    return "/".join(parts)
 
 
 def _size_family(src: Path) -> str:
@@ -251,9 +284,24 @@ class Drainer:
         last = self.ledger.last_print_file()
 
         if rule and rule.starts_session:
-            # The sliced file means a job was just sent: a new print, always.
+            # The sliced file means a job was just sent: a new print, always —
+            # unless its own recording beat it to the stick by a second, in
+            # which case that nameless session IS this print, and takes the name.
+            name = session_name(mtime, model)
+            if last and self._opened_just_before(last, mtime):
+                if name != last["session"]:
+                    self._rename_session(last["session"], name)
+                return name
             prev = last["session"] if last else None
-            return _distinct(session_name(mtime, model), prev)
+            return _distinct(name, prev)
+
+        closer = self.ledger.last_closer()
+        if (closer and last and last["session"] == closer["session"]
+                and 0 <= mtime - closer["src_mtime"] <= TEARDOWN_SECONDS):
+            # Part of the flush that ended the print: the timelapse and its
+            # thumbnails arrive within a fraction of a second of the short
+            # final segment, and whichever sorts first must not strand the rest.
+            return closer["session"]
 
         gap = self.cfg.drain.session_gap_minutes * 60
         if last and last["src_mtime"] is not None:
@@ -265,6 +313,52 @@ class Drainer:
             # the previous folder. Rare, but a collision is a merged print.
             return _distinct(session_name(mtime, model), last["session"])
         return session_name(mtime, model)
+
+    def _opened_just_before(self, last, mtime: float) -> bool:
+        """Is `last`'s session a nameless recording that began just before a
+        sliced file landed — i.e. that sliced file's own print?"""
+        if last["ends_session"] or last["src_mtime"] is None:
+            return False
+        if not is_unnamed(last["session"]):
+            return False
+        opened = self.ledger.session_opened_at(last["session"])
+        return opened is not None and 0 <= mtime - opened <= START_SKEW_SECONDS
+
+    def _rename_session(self, old: str, new: str) -> None:
+        """Re-home a session's records and staged files under a new name.
+
+        Per file: move on disk, then update the row, so a crash mid-way leaves
+        each row pointing at wherever its file actually is. Already-shipped
+        rows only change name — their copy on the Mac is out of reach here.
+        """
+        staging = self.cfg.drain.staging
+        for row in self.ledger.session_files(old):
+            rel = reroot(row["dest_rel"], old, new)
+            staged = None
+            if row["staging_path"]:
+                src = Path(row["staging_path"])
+                dst = staging / rel
+                if src.exists() and not dst.exists():
+                    dst.parent.mkdir(parents=True, exist_ok=True)
+                    src.rename(dst)
+                    staged = dst
+                else:
+                    staged = src
+            self.ledger.reassign(row["sha256"], new, rel, staged)
+        old_dir = staging / "prints" / old
+        for d in sorted((p for p in old_dir.rglob("*") if p.is_dir()),
+                        key=lambda p: len(p.parts), reverse=True):
+            try:
+                d.rmdir()
+            except OSError:
+                pass
+        try:
+            old_dir.rmdir()
+        except OSError:
+            pass
+        log.info("session %s is %s — its recording started before the sliced "
+                 "file landed", old, new)
+        self.ledger.event("session_renamed", f"{old} -> {new}")
 
     def _ensure_medium_present(self) -> None:
         try:
