@@ -19,7 +19,6 @@ overwritten; a collision is reported and skipped.
 from __future__ import annotations
 
 import argparse
-import datetime as dt
 import os
 import re
 import shutil
@@ -36,7 +35,9 @@ MODEL_EXT = {".3mf", ".gcode"}
 # median — so boundary detection here was silently disabled while the daemon's
 # worked fine. Two copies of a rule is how they drift.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from bambu_drain.drain import model_name  # noqa: E402
+from bambu_drain.drain import (  # noqa: E402
+    START_SKEW_SECONDS, TEARDOWN_SECONDS, _distinct, is_unnamed, model_name,
+    session_name)
 
 
 # Files this project GENERATES, which must never be mistaken for printer output.
@@ -105,11 +106,10 @@ def sessions(files: list[Path], gap_seconds: float, short_ratio: float = 0.95
     out: dict[Path, str] = {}
     current: str | None = None
     last: float | None = None
-    closed = False
+    opened_at: float | None = None      # the current session's first file
+    closed_at: float | None = None      # its latest closer, if it has ended
+    members: list[Path] = []
     modal = modal_size(files)
-    # See TEARDOWN_SECONDS in bambu_drain.drain — a print's last segment and its
-    # timelapse are flushed together and both end the session.
-    TEARDOWN = 120
 
     def starts(p: Path) -> bool:
         c = classify(p)
@@ -129,22 +129,37 @@ def sessions(files: list[Path], gap_seconds: float, short_ratio: float = 0.95
         # A starter sorts before everything sharing its second; a closer after.
         return (p.stat().st_mtime, -1 if starts(p) else (1 if ends(p) else 0))
 
+    def open_session(name: str, m: float) -> None:
+        nonlocal current, opened_at, closed_at, members
+        current, opened_at, closed_at, members = name, m, None, []
+
     for f in sorted(files, key=key):
         m = f.stat().st_mtime
-        teardown = closed and ends(f) and last is not None and (m - last) <= TEARDOWN
-        if not teardown and (starts(f) or current is None or closed
-                             or last is None or (m - last) > gap_seconds):
-            stamp = f"{dt.datetime.fromtimestamp(m):%Y-%m-%d_%H%M}"
-            mn = model_name(f) if starts(f) else None
-            name = f"{stamp}_{mn}" if mn else stamp
-            if name == current:
-                base, _, n = (current or "").rpartition("-")
-                name = f"{base}-{int(n) + 1}" if base and n.isdigit() else f"{name}-2"
-            current = name
-            closed = False
+        if starts(f):
+            name = session_name(m, model_name(f))
+            # The recording can start a second or two BEFORE the sliced file
+            # lands (see START_SKEW_SECONDS): that nameless session is this
+            # print's, and the sliced file names it — retroactively, here.
+            adopt = (current is not None and closed_at is None
+                     and opened_at is not None and is_unnamed(current)
+                     and 0 <= m - opened_at <= START_SKEW_SECONDS)
+            if adopt:
+                if name != current:
+                    for x in members:
+                        out[x] = name
+                    current = name
+            else:
+                open_session(_distinct(name, current), m)
+        elif closed_at is not None and 0 <= m - closed_at <= TEARDOWN_SECONDS:
+            pass  # the print's own teardown flush — see TEARDOWN_SECONDS
+        elif (current is None or closed_at is not None or last is None
+              or (m - last) > gap_seconds):
+            open_session(_distinct(session_name(m), current), m)
         out[f] = current
+        members.append(f)
         last = m
-        closed = ends(f)
+        if ends(f):
+            closed_at = m
     return out
 
 

@@ -19,7 +19,8 @@ from tempfile import TemporaryDirectory
 
 from bambu_drain import config
 from bambu_drain.config import Rule
-from bambu_drain.drain import Drainer, dest_relpath, session_name
+from bambu_drain.drain import (TEARDOWN_SECONDS, Drainer, dest_relpath,
+                               session_name)
 from bambu_drain.imagefs import match_rule
 from bambu_drain.ledger import Ledger
 
@@ -202,10 +203,14 @@ class TestTheFailedPrintAndItsRedo(unittest.TestCase):
         self._drain(self.t0 + 4 * 60 + 6, s1)                     # no closer
         self.assertEqual(self.d.session_for(self.t0 + 30 * 60 + 32), s1)
 
-    def test_a_closer_ends_the_session_even_after_only_seconds(self):
+    def test_a_closer_ends_the_session_once_its_teardown_is_over(self):
+        # This used to assert that a file FIVE seconds after a closer opened a
+        # new session. It does not: the printer's whole end-of-print flush is
+        # under a second, and the closest redo on record began 141 s later.
         s1 = self.d.session_for(self.t0)
         self._drain(self.t0, s1, closer=True)
-        self.assertNotEqual(self.d.session_for(self.t0 + 5), s1)
+        self.assertNotEqual(self.d.session_for(self.t0 + TEARDOWN_SECONDS + 1), s1)
+        self.assertNotEqual(self.d.session_for(self.t0 + 141), s1)
 
     def test_the_long_redo_stays_one_session_despite_having_no_timelapse(self):
         t = self.t0 + 30 * 60
@@ -276,3 +281,73 @@ class TestEmptyFileDoesNotClaimTheName(unittest.TestCase):
         self.assertEqual(
             dest_relpath(VIDEO, Path("ipcam/rec.1.mp4"), T, "s", size=0),
             "prints/s/video/rec.1.mp4")
+
+
+class TestTheTeardownFlush(unittest.TestCase):
+    """The real end of a print, replayed from the ledger to the hundredth:
+
+        00:24:52.62   video_….jpg          the timelapse's thumbnail
+        00:24:52.72   seg 64  17.8 MB      short — a closer
+        00:24:52.75   video_…_mini.jpg     the timelapse's small thumbnail
+        00:24:52.80   video_….mp4  13 MB   the timelapse — a closer
+
+    Before this was wired the segment closed the print and the three files
+    behind it opened `2026-09-16_0024`, a folder holding a timelapse and a
+    thumbnail and nothing else — while the print it belonged to got a
+    13-minute reconstruction it never needed.
+    """
+
+    def setUp(self):
+        self.tmp = TemporaryDirectory()
+        root = Path(self.tmp.name)
+        self.led = Ledger(root / "ledger.db")
+        self.cfg = config.from_dict({
+            "gadget": {"image": str(root / "stick.img")},
+            "drain": {"staging": str(root / "staging"), "session_gap_minutes": 45},
+            "rule": [{"glob": "**/*.mp4", "dest": "video", "group": "print"}],
+        })
+        self.d = Drainer(self.cfg, self.led, object())
+        self.t = dt.datetime(2026, 9, 16, 0, 24, 52).timestamp()
+
+    def tearDown(self):
+        self.led.close()
+        self.tmp.cleanup()
+
+    def _drain(self, mtime, session, closer=False):
+        self.led.record_drained(f"sha{mtime}{closer}", "f", "p/f", 1, Path("/s/f"),
+                                session=session, src_mtime=mtime, ends_session=closer)
+
+    def test_the_whole_flush_lands_in_the_print_it_ends(self):
+        s = self.d.session_for(self.t - 600)
+        self._drain(self.t - 600, s)                                # seg 63
+        self._drain(self.t + 0.62, self.d.session_for(self.t + 0.62))
+        self._drain(self.t + 0.72, s, closer=True)                  # seg 64
+        mini = self.d.session_for(self.t + 0.75)
+        self.assertEqual(mini, s, "a thumbnail 30 ms after the closer is teardown")
+        self._drain(self.t + 0.75, mini)
+        lapse = self.d.session_for(self.t + 0.80)
+        self.assertEqual(lapse, s, "the second closer is the same print's")
+        self._drain(self.t + 0.80, lapse, closer=True)
+        # And the window is measured from the LATEST closer.
+        self.assertEqual(self.d.session_for(self.t + 0.80 + TEARDOWN_SECONDS - 1), s)
+        self.assertNotEqual(self.d.session_for(self.t + 0.80 + TEARDOWN_SECONDS + 1), s)
+
+    def test_a_sliced_file_inside_the_window_still_opens_a_print(self):
+        # Pressing print is a new print, teardown or not — and once it has
+        # opened one, the flush is over for everything after it.
+        from bambu_drain.config import Rule
+        sliced = Rule("**/*.3mf", "", group="print", starts_session=True,
+                      names_session=True)
+        s = self.d.session_for(self.t)
+        self._drain(self.t, s, closer=True)
+        s2 = self.d.session_for(self.t + 10, sliced, Path("Next.gcode.3mf"))
+        self.assertNotEqual(s2, s)
+        self._drain(self.t + 10, s2)
+        self.assertEqual(self.d.session_for(self.t + 12), s2)
+
+    def test_the_redo_141_seconds_later_is_its_own_print(self):
+        # The measured margin. A window wide enough to swallow this would file
+        # a 4-hour print under the 24-minute attempt it replaced.
+        s = self.d.session_for(self.t)
+        self._drain(self.t, s, closer=True)
+        self.assertNotEqual(self.d.session_for(self.t + 141), s)

@@ -107,5 +107,95 @@ class TestSlicedFileStartsAPrint(unittest.TestCase):
         self.assertTrue(s2.endswith("_B"), s2)
 
 
+class TestTheRecordingThatBeatTheSlicedFile(unittest.TestCase):
+    """Two prints in a row, to the second:
+
+        19:39:20  ipcam-record.….42.jpg        the first thumbnail
+        19:39:22  07 Vault Door_plate_1.gcode.3mf
+
+    Sorted by mtime the thumbnail arrived first, opened `2026-09-15_1939`, and
+    the sliced file opened `2026-09-15_1939_07_Vault_Door_plate_1` two seconds
+    later. The thumbnail was held six hours as an unfinished print and shipped
+    alone. The sliced file now takes over the session that preceded it —
+    ledger rows and staged files both — when that session is nameless and
+    opened within `START_SKEW_SECONDS`.
+    """
+
+    def setUp(self):
+        self.tmp = TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.staging = self.root / "st"
+        self.led = Ledger(self.root / "l.db")
+        self.cfg = config.from_dict({
+            "gadget": {"image": str(self.root / "s.img")},
+            "drain": {"staging": str(self.staging), "session_gap_minutes": 45},
+            "rule": [{"glob": "**/*.mp4", "dest": "video", "group": "print"}],
+        })
+        self.d = Drainer(self.cfg, self.led, object())
+
+    def tearDown(self):
+        self.led.close()
+        self.tmp.cleanup()
+
+    def _stage(self, sha, session, sub, name, mtime, ends=False):
+        rel = f"prints/{session}/{sub}/{name}" if sub else f"prints/{session}/{name}"
+        path = self.staging / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"x")
+        self.led.record_drained(sha, name, rel, 1, path, session=session,
+                                src_mtime=mtime, ends_session=ends)
+        return path
+
+    def test_the_sliced_file_adopts_the_recording_that_preceded_it(self):
+        thumb_session = self.d.session_for(T + 1, SEGMENT, Path("ipcam.42.jpg"))
+        self.assertEqual(thumb_session, "2026-09-02_2017")
+        old = self._stage("t42", thumb_session, "thumbnails", "ipcam.42.jpg", T + 1)
+
+        s = self.d.session_for(T + 3, SLICED, Path("07 Vault Door_plate_1.gcode.3mf"))
+        self.assertEqual(s, "2026-09-02_2017_07_Vault_Door_plate_1")
+
+        row = self.led.db.execute("SELECT * FROM files WHERE sha256 = 't42'").fetchone()
+        self.assertEqual(row["session"], s)
+        self.assertEqual(row["dest_rel"], f"prints/{s}/thumbnails/ipcam.42.jpg")
+        self.assertFalse(old.exists(), "the staged file moved with its record")
+        self.assertTrue(Path(row["staging_path"]).exists())
+        self.assertEqual(Path(row["staging_path"]), self.staging / row["dest_rel"])
+        self.assertFalse((self.staging / "prints" / thumb_session).exists(),
+                         "the empty folder is gone")
+        # Nothing is left behind under the old name to be held for six hours.
+        self.assertEqual(self.led.session_files(thumb_session), [])
+
+    def test_a_preset_named_sliced_file_simply_joins(self):
+        # No model name means no rename — the stamp it would get is the one
+        # the recording already has.
+        thumb_session = self.d.session_for(T + 1, SEGMENT, Path("ipcam.1.jpg"))
+        self._stage("t1", thumb_session, "thumbnails", "ipcam.1.jpg", T + 1)
+        s = self.d.session_for(T + 3, SLICED, Path("0.2mm layer, 2 walls, 15% infill.gcode.3mf"))
+        self.assertEqual(s, thumb_session)
+
+    def test_a_session_that_opened_earlier_is_not_adopted(self):
+        # A print that has been recording for ten minutes is not this job's.
+        s0 = self.d.session_for(T - 600, SEGMENT, Path("ipcam.1.jpg"))
+        self._stage("a", s0, "thumbnails", "ipcam.1.jpg", T - 600)
+        self._stage("b", s0, "video", "ipcam.1.mp4", T - 1)
+        s = self.d.session_for(T, SLICED, Path("Next.gcode.3mf"))
+        self.assertNotEqual(s, s0)
+        self.assertEqual(self.led.db.execute(
+            "SELECT session FROM files WHERE sha256 = 'a'").fetchone()[0], s0)
+
+    def test_a_named_session_is_not_adopted(self):
+        s0 = self.d.session_for(T - 2, SLICED, Path("First.gcode.3mf"))
+        self._stage("a", s0, "", "First.gcode.3mf", T - 2)
+        s = self.d.session_for(T, SLICED, Path("Second.gcode.3mf"))
+        self.assertNotEqual(s, s0)
+        self.assertTrue(s.endswith("_Second"))
+
+    def test_a_closed_session_is_not_adopted(self):
+        s0 = self.d.session_for(T - 2, SEGMENT, Path("ipcam.9.mp4"))
+        self._stage("a", s0, "video", "ipcam.9.mp4", T - 2, ends=True)
+        s = self.d.session_for(T, SLICED, Path("Next.gcode.3mf"))
+        self.assertNotEqual(s, s0)
+
+
 if __name__ == "__main__":
     unittest.main()

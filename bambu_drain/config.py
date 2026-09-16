@@ -47,9 +47,12 @@ class Rule:
     # all 240.2-240.4 MB, and every genuine print ending came in at 12-91%.
     # Nothing landed between 92% and 99%.
     ends_session_if_short: float = 0.0
-    # The sliced file lands ~15 minutes BEFORE a print's first segment, because
-    # the printer writes it when the job is sent. That makes it the only start
-    # marker available — everything else can only tell us a print has ended.
+    # The sliced file is written when the job is sent — ~15 minutes before the
+    # first segment on the print that motivated this, and 1-2 s AFTER the
+    # first thumbnail on the next two (a job started from Handy begins
+    # recording at once). Either way it is the only start marker available;
+    # everything else can only tell us a print has ended. `START_SKEW_SECONDS`
+    # in drain.py handles the recording that beats it to the stick.
     starts_session: bool = False
     # ...and its filename is the project name, so it can name the folder too.
     names_session: bool = False

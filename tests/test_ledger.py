@@ -46,6 +46,35 @@ class TestLedger(unittest.TestCase):
         self.assertIsNotNone(row["shipped_at"])
         self.assertIsNone(row["verified_at"])
 
+    def test_last_closer_is_the_latest_ending_file_not_the_latest_file(self):
+        self.led.record_drained("seg", "seg.mp4", "prints/s/video/seg.mp4", 5,
+                                Path("/s/seg.mp4"), session="s", src_mtime=100.0,
+                                ends_session=True)
+        self.led.record_drained("mini", "mini.jpg", "prints/s/thumbnails/mini.jpg",
+                                1, Path("/s/mini.jpg"), session="s", src_mtime=100.03)
+        self.assertEqual(self.led.last_print_file()["src_mtime"], 100.03)
+        self.assertEqual(self.led.last_closer()["src_mtime"], 100.0)
+        self.assertIsNone(Ledger(Path(self.tmp.name) / "empty.db").last_closer())
+
+    def test_session_opened_at_is_the_earliest_source_mtime(self):
+        self.led.record_drained("a", "a", "prints/s/a", 1, Path("/s/a"),
+                                session="s", src_mtime=200.0)
+        self.led.record_drained("b", "b", "prints/s/b", 1, Path("/s/b"),
+                                session="s", src_mtime=150.0)
+        self.assertEqual(self.led.session_opened_at("s"), 150.0)
+        self.assertIsNone(self.led.session_opened_at("nope"))
+
+    def test_reassign_moves_a_record_between_sessions(self):
+        self.led.record_drained("a", "a.jpg", "prints/old/thumbnails/a.jpg", 1,
+                                Path("/st/prints/old/thumbnails/a.jpg"),
+                                session="old", src_mtime=1.0)
+        self.led.reassign("a", "new", "prints/new/thumbnails/a.jpg",
+                          Path("/st/prints/new/thumbnails/a.jpg"))
+        row = self.led.session_files("new")[0]
+        self.assertEqual(row["dest_rel"], "prints/new/thumbnails/a.jpg")
+        self.assertEqual(row["staging_path"], "/st/prints/new/thumbnails/a.jpg")
+        self.assertEqual(self.led.session_files("old"), [])
+
     def test_events_are_ordered_newest_first(self):
         self.led.event("drain", "one")
         self.led.event("ship", "two")

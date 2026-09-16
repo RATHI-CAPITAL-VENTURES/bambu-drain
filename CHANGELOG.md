@@ -4,6 +4,33 @@
 header equals `VERSION`, is new relative to the base branch, and increases
 monotonically. A MINOR bump is a milestone and must ship a retro.
 
+## 0.9.5 — 2026-09-16
+
+### Fixed
+
+- **A print's timelapse and its thumbnails were filed in a folder of their
+  own, and the print got a reconstruction it did not need.** The end of a
+  print is one flush — timelapse thumbnail, short final segment, `_mini`
+  thumbnail, timelapse, 0.18 s end to end — and the segment closed the
+  session before the three files behind it arrived. `TEARDOWN_SECONDS` was
+  declared for exactly this in 0.6.0, recorded in that retro as applied in
+  the daemon, and read only by the archive migration. It is wired now, at
+  30 s and measured from the latest closer; the migration is corrected too,
+  since its closers-only window missed the `_mini` thumbnail.
+- **A thumbnail that beat the sliced file to the stick became a one-file
+  print.** A job started from Handy starts recording at once, so the first
+  thumbnail landed 1-2 s before the `.gcode.3mf`, opened a nameless session,
+  and was held six hours as an unfinished print. A sliced file now takes over
+  a nameless open session that opened within `START_SKEW_SECONDS` (120) —
+  staged files moved, ledger rows repointed — and the migration does the
+  same retroactively. `regroup_archive.py --src <archive>` now reproduces the
+  two-folder layout from the night of 2026-09-15 that shipped as four.
+
+Both found because "the Pi hasn't drained my last two prints": it had, and
+Finder showed four folders and a `timelapse.mp4` two folders away from its
+print. Also corrected in the docs: the printer's clock is UTC+8, and the
+sliced file does not reliably lead the recording by fifteen minutes.
+
 ## 0.9.4 — 2026-09-15
 
 ### Fixed

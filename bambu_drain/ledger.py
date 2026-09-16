@@ -150,6 +150,43 @@ class Ledger:
         )
         return cur.fetchone()
 
+    def last_closer(self) -> sqlite3.Row | None:
+        """The most recent session-ENDING file, by source mtime.
+
+        The teardown window is measured from this, not from `last_print_file`:
+        the timelapse's thumbnail lands between the short final segment and the
+        timelapse itself, and once it has joined the session the last file is
+        no longer a closer — so measuring from the last file would let the
+        timelapse open a folder of its own again.
+        """
+        return self.db.execute(
+            "SELECT session, src_mtime FROM files "
+            "WHERE ends_session = 1 AND session IS NOT NULL AND src_mtime IS NOT NULL "
+            "ORDER BY src_mtime DESC LIMIT 1"
+        ).fetchone()
+
+    def session_opened_at(self, session: str) -> float | None:
+        """When a session's earliest file was written by the printer."""
+        row = self.db.execute(
+            "SELECT MIN(src_mtime) t FROM files WHERE session = ?", (session,)
+        ).fetchone()
+        return row["t"] if row else None
+
+    def session_files(self, session: str) -> list[sqlite3.Row]:
+        return list(self.db.execute(
+            "SELECT sha256, dest_rel, staging_path FROM files WHERE session = ?",
+            (session,)))
+
+    def reassign(self, sha: str, session: str, dest_rel: str,
+                 staging_path: Path | None) -> None:
+        """Move one file's record to another session (the file itself is the
+        caller's job — see `Drainer._rename_session`)."""
+        self.db.execute(
+            "UPDATE files SET session = ?, dest_rel = ?, staging_path = ? "
+            "WHERE sha256 = ?",
+            (session, dest_rel, str(staging_path) if staging_path else None, sha),
+        )
+
     # -- ship side ---------------------------------------------------------
 
     def unshipped(self, only_closed_sessions: bool = False,

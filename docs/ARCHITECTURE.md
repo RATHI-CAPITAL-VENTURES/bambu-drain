@@ -490,6 +490,62 @@ distinguishes them.
   boundaries are chronological and a backlog is drained all at once long after
   the fact.
 
+### The teardown is one flush, and it is not the sort order that saves it
+
+exFAT keeps mtimes to 10 ms, so "the same second" was never quite the case.
+The real end of a print, from the ledger:
+
+```
+00:24:52.62   video_….jpg          the timelapse's thumbnail
+00:24:52.72   ipcam-record.64.mp4  17.8 MB — short, a closer
+00:24:52.75   video_…_mini.jpg     the timelapse's small thumbnail
+00:24:52.80   video_….mp4          the timelapse — a closer
+```
+
+Sorted by mtime the segment closes the print, and the three files behind it
+open a new session — a folder holding a timelapse and a thumbnail and nothing
+else, beside a 4.4-hour print with no timelapse in it. The tie-break above
+cannot help, because these are not ties. And it gets worse: with the printer's
+timelapse filed elsewhere, the print reads as having none, and the Pi spends
+thirteen minutes rendering a reconstruction it did not need.
+
+`TEARDOWN_SECONDS` (30) is the rule: anything landing that soon after the
+session's latest closer is part of the flush and joins the print it ended. It
+is measured from the latest **closer**, not the latest file — once the `_mini`
+thumbnail has joined, the last file is no longer a closer, and measuring from it
+would let the timelapse open a folder of its own again. A sliced file inside the
+window still opens a new print; pressing print is pressing print.
+
+**This was declared in 0.6.0 at 120 s and applied only in the archive
+migration.** The daemon defined the constant and never read it, and the 0.6.0
+retro recorded it as landed in both. Every print with a timelapse since then got
+the one-file folder. It is 30 s now rather than 120 because the window is no
+longer closers-only — the closest redo on record started 141 s after the short
+segment that ended the failed attempt, and its first file is a thumbnail.
+
+### The recording can beat the sliced file
+
+"The sliced file lands ~15 minutes before the first segment" held for the print
+that motivated `starts_session`, and not for the two after it:
+
+```
+19:39:20  ipcam-record.42.jpg               the chamber recording's first thumbnail
+19:39:22  07 Vault Door_plate_1.gcode.3mf   the sliced file
+```
+
+A job started from Handy begins recording at once. Sorted by mtime the
+thumbnail opened `2026-09-15_1939`, the sliced file opened
+`2026-09-15_1939_07_Vault_Door_plate_1` two seconds later, and the thumbnail
+was held six hours as an unfinished print before shipping as a one-file folder.
+
+`START_SKEW_SECONDS` (120): a sliced file whose predecessor is a **nameless,
+still-open** session that **opened** within the window takes that session over
+— `Drainer._rename_session` moves the staged files and repoints the ledger rows,
+per file, move first and row second, so a crash mid-way leaves every row
+pointing at wherever its file actually is. It keys on when the session opened,
+not on its last file, so a print that has been recording for an hour when the
+next job is queued is never mistaken for that job's own recording.
+
 ### Manually exported timelapses cannot be grouped by time
 
 If you copy timelapses from the printer's internal storage onto the USB drive
@@ -507,9 +563,15 @@ it lands in its own session.
 ### Session names
 
 `YYYY-MM-DD_HHMM`, from the first file that opened the session — and taken from
-the **mtime**, not the filename. The P2S's clock is ~12 hours off, so its
-filenames say `21-13` for a print that ran at `09:13`. The folder names are
-right; the names inside them are not.
+the **mtime**, not the filename. The P2S's clock is 12 hours ahead (it keeps
+UTC+8, against EDT), so its filenames say `21-13` for a print that ran at
+`09:13`. The folder names are right; the names inside them are not.
+
+A redo — the printer re-running a job after a failure or a cancel, with no new
+sliced file — keeps a plain stamp, so the 24-minute failed attempt carries the
+model name and the 4.4-hour print that replaced it does not. Naming the redo
+after the closed session before it would be a guess: a print started from the
+printer's own storage produces no sliced file either. Not done.
 
 Minute granularity means two sessions starting in the same minute would collide,
 so `_distinct()` suffixes `-2`, `-3`. Unlikely, but a collision silently merges
