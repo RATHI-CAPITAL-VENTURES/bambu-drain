@@ -4,6 +4,29 @@
 header equals `VERSION`, is new relative to the base branch, and increases
 monotonically. A MINOR bump is a milestone and must ship a retro.
 
+## 0.9.6 — 2026-09-24
+
+### Changed
+
+- **Print folders are named model-first, with a short date and no time of
+  day:** `Voronoi_Classic_Mustang_3D_Printable_Car_Model_09_23_26`, or
+  `09_23_26` for a job whose sliced file carried a preset name. Was
+  `2026-09-23_1100_Voronoi_…`. Finder is scanned by name, and the time was
+  fourteen characters nobody read. Dropping it makes a same-day repeat
+  ordinary, so a collision is now checked against every session the ledger
+  has ever named rather than the one before it — A, then B, then A in one
+  afternoon would otherwise have merged the second A into the first. The
+  archive migration (`regroup_archive.py`) names the same way. Folders
+  already on the Mac keep their old names.
+
+### Found, not yet fixed
+
+- **A drained backlog escapes the six-hour hold**, because the hold is
+  measured against the printer's file mtimes and a backlog's oldest segments
+  are drained first. The Mustang print's first sixteen segments shipped before
+  the session was recognised as open, and its reconstruction was rendered
+  from the 43 left. Written up in `ARCHITECTURE.md` under the hold.
+
 ## 0.9.5 — 2026-09-16
 
 ### Fixed

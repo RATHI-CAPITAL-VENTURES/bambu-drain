@@ -56,12 +56,11 @@ class TestModelName(unittest.TestCase):
 
 
 class TestSessionName(unittest.TestCase):
-    def test_named(self):
-        self.assertTrue(session_name(T, "Steamer").endswith("_Steamer"))
+    def test_named_is_model_then_short_date(self):
+        self.assertEqual(session_name(T, "Steamer"), "Steamer_09_02_26")
 
-    def test_unnamed_is_just_the_stamp(self):
-        self.assertNotIn("_2", session_name(T, None)[11:])
-        self.assertEqual(len(session_name(T, None)), len("2026-09-02_2017"))
+    def test_unnamed_is_just_the_date(self):
+        self.assertEqual(session_name(T, None), "09_02_26")
 
 
 class TestSlicedFileStartsAPrint(unittest.TestCase):
@@ -86,11 +85,28 @@ class TestSlicedFileStartsAPrint(unittest.TestCase):
 
     def test_the_sliced_file_names_the_session(self):
         s = self.d.session_for(T, SLICED, Path("Steamer_Cable_Holder_v1.gcode.3mf"))
-        self.assertTrue(s.endswith("_Steamer_Cable_Holder_v1"), s)
+        self.assertEqual(s, "Steamer_Cable_Holder_v1_09_02_26")
 
-    def test_a_preset_named_file_leaves_a_plain_timestamp(self):
+    def test_a_preset_named_file_leaves_a_plain_date(self):
         s = self.d.session_for(T, SLICED, Path("0.2mm layer, 2 walls, 15% infill.gcode.3mf"))
-        self.assertEqual(s, "2026-09-02_2017")
+        self.assertEqual(s, "09_02_26")
+
+    def test_a_reprint_the_same_day_gets_its_own_folder(self):
+        # A, then B, then A again — an ordinary afternoon now that names carry
+        # no time of day. The third must not land in the first one's folder.
+        s1 = self.d.session_for(T, SLICED, Path("A.gcode.3mf"))
+        self._rec(T, s1, ends=True)
+        s2 = self.d.session_for(T + 3600, SLICED, Path("B.gcode.3mf"))
+        self._rec(T + 3600, s2, ends=True)
+        s3 = self.d.session_for(T + 7200, SLICED, Path("A.gcode.3mf"))
+        self.assertEqual((s1, s2, s3), ("A_09_02_26", "B_09_02_26", "A_09_02_26-2"))
+
+    def test_a_redo_the_same_day_gets_its_own_folder(self):
+        # No sliced file, so no name: a second nameless run that day is "-2".
+        s1 = self.d.session_for(T, SEGMENT, Path("ipcam.1.mp4"))
+        self._rec(T, s1, ends=True)
+        s2 = self.d.session_for(T + 3600, SEGMENT, Path("ipcam.1.mp4"))
+        self.assertEqual((s1, s2), ("09_02_26", "09_02_26-2"))
 
     def test_segments_arriving_later_join_the_named_session(self):
         s = self.d.session_for(T, SLICED, Path("Steamer.gcode.3mf"))
@@ -104,7 +120,7 @@ class TestSlicedFileStartsAPrint(unittest.TestCase):
         self._rec(T, s1)
         s2 = self.d.session_for(T + 60, SLICED, Path("B.gcode.3mf"))
         self.assertNotEqual(s1, s2)
-        self.assertTrue(s2.endswith("_B"), s2)
+        self.assertTrue(s2.startswith("B_"), s2)
 
 
 class TestTheRecordingThatBeatTheSlicedFile(unittest.TestCase):
@@ -148,11 +164,11 @@ class TestTheRecordingThatBeatTheSlicedFile(unittest.TestCase):
 
     def test_the_sliced_file_adopts_the_recording_that_preceded_it(self):
         thumb_session = self.d.session_for(T + 1, SEGMENT, Path("ipcam.42.jpg"))
-        self.assertEqual(thumb_session, "2026-09-02_2017")
+        self.assertEqual(thumb_session, "09_02_26")
         old = self._stage("t42", thumb_session, "thumbnails", "ipcam.42.jpg", T + 1)
 
         s = self.d.session_for(T + 3, SLICED, Path("07 Vault Door_plate_1.gcode.3mf"))
-        self.assertEqual(s, "2026-09-02_2017_07_Vault_Door_plate_1")
+        self.assertEqual(s, "07_Vault_Door_plate_1_09_02_26")
 
         row = self.led.db.execute("SELECT * FROM files WHERE sha256 = 't42'").fetchone()
         self.assertEqual(row["session"], s)
@@ -188,7 +204,20 @@ class TestTheRecordingThatBeatTheSlicedFile(unittest.TestCase):
         self._stage("a", s0, "", "First.gcode.3mf", T - 2)
         s = self.d.session_for(T, SLICED, Path("Second.gcode.3mf"))
         self.assertNotEqual(s, s0)
-        self.assertTrue(s.endswith("_Second"))
+        self.assertTrue(s.startswith("Second_"))
+
+    def test_adoption_never_merges_into_an_earlier_print_of_the_same_model(self):
+        # Model A printed this morning; this afternoon its recording beats its
+        # sliced file again. The nameless session takes A's name — suffixed,
+        # because A's folder from the morning already exists.
+        s0 = self.d.session_for(T - 7200, SLICED, Path("A.gcode.3mf"))
+        self._stage("m", s0, "", "A.gcode.3mf", T - 7200, ends=True)
+        thumb = self.d.session_for(T + 1, SEGMENT, Path("ipcam.1.jpg"))
+        self._stage("t", thumb, "thumbnails", "ipcam.1.jpg", T + 1)
+        s = self.d.session_for(T + 3, SLICED, Path("A.gcode.3mf"))
+        self.assertEqual((s0, thumb, s), ("A_09_02_26", "09_02_26", "A_09_02_26-2"))
+        self.assertEqual(self.led.db.execute(
+            "SELECT session FROM files WHERE sha256 = 't'").fetchone()[0], s)
 
     def test_a_closed_session_is_not_adopted(self):
         s0 = self.d.session_for(T - 2, SEGMENT, Path("ipcam.9.mp4"))

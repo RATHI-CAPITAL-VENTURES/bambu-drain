@@ -67,26 +67,26 @@ class TestTheNightOf0915(unittest.TestCase):
     def test_two_prints_two_folders(self):
         sess = sessions(self.files, 45 * 60)
         self.assertEqual(set(sess.values()),
-                         {"2026-09-15_1939_07_Vault_Door_plate_1", "2026-09-15_2006"})
+                         {"07_Vault_Door_plate_1_09_15_26", "09_15_26"})
 
     def test_the_thumbnail_that_beat_the_sliced_file_is_in_the_named_folder(self):
         sess = sessions(self.files, 45 * 60)
         self.assertEqual(sess[self.src / "x/ipcam-record.42.jpg"],
-                         "2026-09-15_1939_07_Vault_Door_plate_1")
+                         "07_Vault_Door_plate_1_09_15_26")
 
     def test_the_timelapse_and_its_thumbnails_stay_with_the_redo(self):
         sess = sessions(self.files, 45 * 60)
         for n in ("video_2026-09-16_08-22-55.jpg", "ipcam-record.64.mp4",
                   "video_2026-09-16_08-22-55_mini.jpg", "video_2026-09-16_08-22-55.mp4"):
-            self.assertEqual(sess[self.src / "x" / n], "2026-09-15_2006", n)
+            self.assertEqual(sess[self.src / "x" / n], "09_15_26", n)
 
     def test_the_plan_puts_the_timelapse_at_the_redo_root(self):
         moves, _, _ = plan(self.src, self.src, 45 * 60)
         targets = {f.name: t.relative_to(self.src) for f, t in moves}
         self.assertEqual(targets["video_2026-09-16_08-22-55.mp4"],
-                         Path("prints/2026-09-15_2006/timelapse.mp4"))
+                         Path("prints/09_15_26/timelapse.mp4"))
         self.assertEqual(targets["07 Vault Door_plate_1.gcode.3mf"],
-                         Path("prints/2026-09-15_1939_07_Vault_Door_plate_1/"
+                         Path("prints/07_Vault_Door_plate_1_09_15_26/"
                               "07 Vault Door_plate_1.gcode.3mf"))
 
 

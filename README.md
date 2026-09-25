@@ -129,7 +129,7 @@ The chamber recording always reaches the drive; the assembled timelapse
 sometimes stays on the printer's internal storage. When that happens:
 
 ```sh
-tools/make_timelapse.py "<archive>/prints/2026-09-02_0945"
+tools/make_timelapse.py "<archive>/prints/3DBenchy_09_02_26"
 tools/make_timelapse.py "<archive>/prints/..." --length 90 --check
 ```
 

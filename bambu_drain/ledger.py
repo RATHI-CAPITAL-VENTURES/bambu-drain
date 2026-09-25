@@ -172,6 +172,11 @@ class Ledger:
         ).fetchone()
         return row["t"] if row else None
 
+    def session_names(self) -> set[str]:
+        """Every session ever named — what a new name must not collide with."""
+        return {r["session"] for r in self.db.execute(
+            "SELECT DISTINCT session FROM files WHERE session IS NOT NULL")}
+
     def session_files(self, session: str) -> list[sqlite3.Row]:
         return list(self.db.execute(
             "SELECT sha256, dest_rel, staging_path FROM files WHERE session = ?",
