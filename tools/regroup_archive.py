@@ -144,17 +144,18 @@ def sessions(files: list[Path], gap_seconds: float, short_ratio: float = 0.95
                      and opened_at is not None and is_unnamed(current)
                      and 0 <= m - opened_at <= START_SKEW_SECONDS)
             if adopt:
+                name = _distinct(name, set(out.values()) - {current})
                 if name != current:
                     for x in members:
                         out[x] = name
                     current = name
             else:
-                open_session(_distinct(name, current), m)
+                open_session(_distinct(name, out.values()), m)
         elif closed_at is not None and 0 <= m - closed_at <= TEARDOWN_SECONDS:
             pass  # the print's own teardown flush — see TEARDOWN_SECONDS
         elif (current is None or closed_at is not None or last is None
               or (m - last) > gap_seconds):
-            open_session(_distinct(session_name(m), current), m)
+            open_session(_distinct(session_name(m), out.values()), m)
         out[f] = current
         members.append(f)
         last = m

@@ -9,8 +9,8 @@ The footage is far better raw material than the per-segment thumbnails, of which
 there is one every ~12 minutes — 22 stills for a 4-hour print, under a second of
 video. This samples the actual recording instead.
 
-    tools/make_timelapse.py prints/2026-09-02_0945
-    tools/make_timelapse.py prints/2026-09-02_0945 --length 90
+    tools/make_timelapse.py prints/3DBenchy_09_02_26
+    tools/make_timelapse.py prints/3DBenchy_09_02_26 --length 90
 
 The output is named `timelapse-reconstructed.mp4`, deliberately NOT
 `timelapse.mp4`: one is what the printer made, the other is what we assembled,

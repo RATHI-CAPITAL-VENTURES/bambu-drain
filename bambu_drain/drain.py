@@ -59,9 +59,16 @@ def model_name(src: Path) -> str | None:
 
 
 def session_name(when: float, model: str | None = None) -> str:
-    """A print session's folder name, from the file that opened it."""
-    stamp = f"{datetime.fromtimestamp(when):%Y-%m-%d_%H%M}"
-    return f"{stamp}_{model}" if model else stamp
+    """A print session's folder name, from the file that opened it.
+
+    `<model>_MM_DD_YY`, or a bare `MM_DD_YY` when the sliced file carried a
+    preset name rather than a model's. Model first, because Finder is scanned
+    by name; short date second, because it is what you check once the name
+    matches. No time of day: it prefixed every folder with fourteen characters
+    nobody read, and a same-day repeat is told apart by `_distinct` instead.
+    """
+    stamp = f"{datetime.fromtimestamp(when):%m_%d_%y}"
+    return f"{model}_{stamp}" if model else stamp
 
 
 def dest_relpath(rule, src: Path, when: float, session: str | None = None,
@@ -140,7 +147,7 @@ TEARDOWN_SECONDS = 30
 # the sliced file takes it over — records, staged files and all.
 START_SKEW_SECONDS = 120
 
-_UNNAMED = re.compile(r"^\d{4}-\d{2}-\d{2}_\d{4}(-\d+)?$")
+_UNNAMED = re.compile(r"^\d{2}_\d{2}_\d{2}(-\d+)?$")
 
 
 def is_unnamed(session: str) -> bool:
@@ -166,21 +173,21 @@ def _size_family(src: Path) -> str:
     return f"{stem}%{src.suffix}"
 
 
-def _distinct(name: str, previous: str | None) -> str:
-    """A session name that cannot collide with the one it follows."""
-    if previous is None:
+def _distinct(name: str, taken) -> str:
+    """A session name that collides with none already in use.
+
+    Checked against EVERY session ever named, not just the one before it.
+    Names are day-granular, so printing A, then B, then A again in one
+    afternoon is ordinary — and against only its predecessor the second A
+    would have merged into the first, with B sitting in between.
+    """
+    taken = set(taken or ())
+    if name not in taken:
         return name
-    # Compare against the previous name's BASE, not its suffixed form: after
-    # "…_0927-2" exists, plain "…_0927" is still taken by the session that
-    # forced the suffix in the first place.
-    base, _, n = previous.rpartition("-")
-    if base and n.isdigit():
-        prev_base, prev_n = base, int(n)
-    else:
-        prev_base, prev_n = previous, 1
-    if name != prev_base:
-        return name
-    return f"{name}-{prev_n + 1}"
+    n = 2
+    while f"{name}-{n}" in taken:
+        n += 1
+    return f"{name}-{n}"
 
 
 def _unique(path: Path, sha: str) -> Path:
@@ -282,6 +289,7 @@ class Drainer:
         """
         model = model_name(src) if (rule and rule.names_session and src) else None
         last = self.ledger.last_print_file()
+        taken = self.ledger.session_names()
 
         if rule and rule.starts_session:
             # The sliced file means a job was just sent: a new print, always —
@@ -289,11 +297,14 @@ class Drainer:
             # which case that nameless session IS this print, and takes the name.
             name = session_name(mtime, model)
             if last and self._opened_just_before(last, mtime):
+                # The nameless session is free to take this name; every OTHER
+                # session is not — a second print of the same model that day
+                # must not be moved into the first one's folder.
+                name = _distinct(name, taken - {last["session"]})
                 if name != last["session"]:
                     self._rename_session(last["session"], name)
                 return name
-            prev = last["session"] if last else None
-            return _distinct(name, prev)
+            return _distinct(name, taken)
 
         closer = self.ledger.last_closer()
         if (closer and last and last["session"] == closer["session"]
@@ -308,11 +319,11 @@ class Drainer:
             if not last["ends_session"] and abs(mtime - last["src_mtime"]) <= gap:
                 return last["session"]
             # Either a timelapse closed that print, or the gap is too large.
-            # Session names are minute-granular for readability, so a genuinely
-            # new session starting inside the same minute would silently reuse
-            # the previous folder. Rare, but a collision is a merged print.
-            return _distinct(session_name(mtime, model), last["session"])
-        return session_name(mtime, model)
+            # Session names are day-granular, so a redo the same afternoon
+            # would silently reuse the folder — and a collision is a merged
+            # print. `_distinct` suffixes it instead.
+            return _distinct(session_name(mtime, model), taken)
+        return _distinct(session_name(mtime, model), taken)
 
     def _opened_just_before(self, last, mtime: float) -> bool:
         """Is `last`'s session a nameless recording that began just before a

@@ -184,6 +184,30 @@ guards compose: the hold protects the render, the timeout protects the pipeline.
 
 Files with no session — a sliced model, anything ungrouped — are never held.
 
+### The hold has a hole: a backlog escapes it (found 2026-09-23, open)
+
+The timeout compares the session's newest **printer mtime** against the
+six-hour window, and a backlog is drained in mtime order, oldest first. The
+Pi was power-cycled for a rewiring while the Mustang print was on its last
+segment; when it came back it drained 59 segments recorded over the previous
+nine hours. On the first ship pass, the newest segment drained so far carried
+an mtime nine hours old — "timed out" — so sixteen segments shipped and were
+cleared from staging before a newer one lifted the session back into the hold.
+When the truncated final segment then closed it, the render ran on the 43
+still staged: a timelapse that begins two and a half hours in, with the
+"dead air" skip applied to the middle of the print.
+
+The fix is to measure the hold from when the session was last **drained**, not
+when its newest file was written — a session whose files are still arriving is
+not stalled, whatever their timestamps say. Not yet applied.
+
+The same power cut left segment 69 without a `moov` atom — the printer never
+closed it — so it is unreadable by ffmpeg, the real-time tail bookend was
+dropped, and the "short final segment" that ended the session was a cut cable,
+not a finished print. Segments 1-10 of that print never reached the stick at
+all: the ledger has no record of them, so they went to the printer's internal
+storage while the Pi was off.
+
 ## Ledger
 
 `ledger.db` (SQLite, WAL) keys on the file's SHA-256. `known()` gates every
@@ -426,7 +450,7 @@ blurs the two lies about its own provenance.
 The archive is one folder per print:
 
 ```
-prints/2026-09-02_0945/
+prints/3DBenchy_09_02_26/
   timelapse.mp4
   video/       22 chamber segments, 5.06 GB
   thumbnails/
@@ -562,8 +586,24 @@ it lands in its own session.
 
 ### Session names
 
-`YYYY-MM-DD_HHMM`, from the first file that opened the session — and taken from
-the **mtime**, not the filename. The P2S's clock is 12 hours ahead (it keeps
+`<model>_MM_DD_YY` — `Voronoi_Classic_Mustang_3D_Printable_Car_Model_09_23_26`
+— or a bare `MM_DD_YY` when the sliced file carried a preset name rather than
+a model's. Model first, because Finder is scanned by name; short date second,
+because it is what you check once the name matches. No time of day (0.9.6): it
+prefixed every folder with fourteen characters nobody read, and Finder sorted
+the archive by when a print happened rather than what it was. Everything up to
+0.9.5 was named `YYYY-MM-DD_HHMM[_model]`, and the folders already on the Mac
+keep those names — nothing is renamed in place.
+
+Day-granular names make a same-day repeat ordinary: A, then B, then A again is
+a normal afternoon. `_distinct` suffixes the repeat (`A_09_23_26-2`) and checks
+against **every session the ledger has ever named**, not only the one before
+it. The minute-granular version compared against its predecessor alone, which
+was fine when a collision needed two prints in one minute; with B in between,
+it would have merged the second A into the first.
+
+The date is the first file that opened the session — and taken from the
+**mtime**, not the filename. The P2S's clock is 12 hours ahead (it keeps
 UTC+8, against EDT), so its filenames say `21-13` for a print that ran at
 `09:13`. The folder names are right; the names inside them are not.
 

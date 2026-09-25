@@ -59,8 +59,11 @@ class TestLayout(unittest.TestCase):
         self.assertTrue(
             dest_relpath(MODEL, Path("a.3mf"), T, "2026-09-02_2113").startswith("models/"))
 
-    def test_session_name_is_date_and_time(self):
-        self.assertEqual(session_name(T), "2026-09-02_2113")
+    def test_session_name_is_the_short_date(self):
+        self.assertEqual(session_name(T), "09_02_26")
+
+    def test_session_name_puts_the_model_first(self):
+        self.assertEqual(session_name(T, "3DBenchy"), "3DBenchy_09_02_26")
 
 
 class TestRuleOrdering(unittest.TestCase):
@@ -104,7 +107,7 @@ class TestSessionBoundaries(unittest.TestCase):
                                 Path("/s/x.mp4"), session=session, src_mtime=mtime)
 
     def test_the_first_file_opens_a_session(self):
-        self.assertEqual(self.d.session_for(T), "2026-09-02_2113")
+        self.assertEqual(self.d.session_for(T), "09_02_26")
 
     def test_a_segment_14_minutes_later_joins_it(self):
         # The real interval between segments of one print.
@@ -232,26 +235,31 @@ class TestTheFailedPrintAndItsRedo(unittest.TestCase):
 
 
 class TestSessionNameCollisions(unittest.TestCase):
-    """Minute-granular names must not merge two sessions that share a minute."""
+    """Day-granular names must not merge two prints that share a day."""
 
     def test_distinct_leaves_a_different_name_alone(self):
         from bambu_drain.drain import _distinct
-        self.assertEqual(_distinct("2026-09-02_0930", "2026-09-02_0927"),
-                         "2026-09-02_0930")
+        self.assertEqual(_distinct("09_02_26", {"Benchy_09_02_26"}), "09_02_26")
 
     def test_distinct_suffixes_an_identical_name(self):
         from bambu_drain.drain import _distinct
-        self.assertEqual(_distinct("2026-09-02_0927", "2026-09-02_0927"),
-                         "2026-09-02_0927-2")
+        self.assertEqual(_distinct("09_02_26", {"09_02_26"}), "09_02_26-2")
 
     def test_distinct_increments_an_existing_suffix(self):
         from bambu_drain.drain import _distinct
-        self.assertEqual(_distinct("2026-09-02_0927", "2026-09-02_0927-2"),
-                         "2026-09-02_0927-3")
+        self.assertEqual(_distinct("09_02_26", {"09_02_26", "09_02_26-2"}),
+                         "09_02_26-3")
+
+    def test_distinct_checks_every_session_not_just_the_last(self):
+        # A, then B, then A again: against its predecessor alone the second A
+        # would have merged into the first.
+        from bambu_drain.drain import _distinct
+        self.assertEqual(_distinct("A_09_02_26", {"A_09_02_26", "B_09_02_26"}),
+                         "A_09_02_26-2")
 
     def test_no_previous_session(self):
         from bambu_drain.drain import _distinct
-        self.assertEqual(_distinct("2026-09-02_0927", None), "2026-09-02_0927")
+        self.assertEqual(_distinct("09_02_26", None), "09_02_26")
 
 
 class TestEmptyFileDoesNotClaimTheName(unittest.TestCase):
