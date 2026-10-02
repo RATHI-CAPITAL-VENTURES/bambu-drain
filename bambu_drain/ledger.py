@@ -24,7 +24,9 @@ CREATE TABLE IF NOT EXISTS files (
     ends_session INTEGER DEFAULT 0,
     drained_at   REAL NOT NULL,
     shipped_at   REAL,
-    verified_at  REAL
+    verified_at  REAL,
+    discard      INTEGER DEFAULT 0,
+    discarded_at REAL
 );
 CREATE INDEX IF NOT EXISTS files_unshipped ON files (shipped_at) WHERE shipped_at IS NULL;
 
@@ -51,7 +53,9 @@ class Ledger:
         # Additive migration for ledgers created before print grouping.
         cols = {r[1] for r in self.db.execute("PRAGMA table_info(files)")}
         for col, typ in (("session", "TEXT"), ("src_mtime", "REAL"),
-                         ("ends_session", "INTEGER DEFAULT 0")):
+                         ("ends_session", "INTEGER DEFAULT 0"),
+                         ("discard", "INTEGER DEFAULT 0"),
+                         ("discarded_at", "REAL")):
             if col not in cols:
                 self.db.execute(f"ALTER TABLE files ADD COLUMN {col} {typ}")
 
@@ -67,16 +71,38 @@ class Ledger:
     def record_drained(
         self, sha: str, src_name: str, dest_rel: str, size: int, staging_path: Path,
         session: str | None = None, src_mtime: float | None = None,
-        ends_session: bool = False,
+        ends_session: bool = False, discard: bool = False,
     ) -> None:
         self.db.execute(
             "INSERT OR REPLACE INTO files "
             "(sha256, src_name, dest_rel, size, staging_path, drained_at, "
-            " session, src_mtime, ends_session) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            " session, src_mtime, ends_session, discard) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (sha, src_name, dest_rel, size, str(staging_path), time.time(),
-             session, src_mtime, 1 if ends_session else 0),
+             session, src_mtime, 1 if ends_session else 0, 1 if discard else 0),
         )
+
+    def timelapses(self, session: str) -> list[sqlite3.Row]:
+        """A session's timelapse files — the printer's own or a rebuilt one.
+
+        By position and name, not `LIKE '%timelapse%.mp4'`: that also matched
+        every segment of a print whose MODEL was named "Timelapse stand", and
+        this answer now decides whether footage is deleted. Empty files do not
+        count; the printer has exported a 0-byte timelapse before.
+        """
+        rows = self.db.execute(
+            "SELECT * FROM files WHERE session = ? AND size > 0", (session,))
+        out = []
+        for r in rows:
+            parts = r["dest_rel"].split("/")
+            if (len(parts) == 3 and parts[0] == "prints"
+                    and parts[2].startswith("timelapse") and parts[2].endswith(".mp4")):
+                out.append(r)
+        return out
+
+    def timelapse_verified(self, session: str) -> bool:
+        """Is one of the session's timelapses checksum-verified on the ship host?"""
+        return any(r["verified_at"] is not None for r in self.timelapses(session))
 
     def sessions_needing_render(self) -> list[str]:
         """Closed sessions whose segments are still staged and have no timelapse.
@@ -90,10 +116,9 @@ class Ledger:
             "SELECT session FROM files WHERE session IS NOT NULL "
             "GROUP BY session HAVING "
             "  MAX(ends_session) = 1 "
-            "  AND SUM(CASE WHEN staging_path IS NOT NULL THEN 1 ELSE 0 END) > 0 "
-            "  AND SUM(CASE WHEN dest_rel LIKE '%timelapse%.mp4' THEN 1 ELSE 0 END) = 0"
+            "  AND SUM(CASE WHEN staging_path IS NOT NULL THEN 1 ELSE 0 END) > 0"
         )
-        return [r["session"] for r in rows]
+        return [r["session"] for r in rows if not self.timelapses(r["session"])]
 
     def staged_segments(self, session: str) -> list[Path]:
         """Staged chamber segments for a session, in order."""
@@ -246,6 +271,19 @@ class Ledger:
             (now, now if verified else None, sha),
         )
 
+    def record_discarded(self, sha: str) -> None:
+        """Raw material deleted on purpose, its timelapse safely shipped.
+
+        `shipped_at` is set so the row leaves every pending query; `verified_at`
+        stays NULL because nothing of it is on the ship host. The row itself is
+        kept: it is how a re-drained copy is recognised, and where the modal
+        segment size comes from.
+        """
+        now = time.time()
+        self.db.execute(
+            "UPDATE files SET shipped_at = ?, discarded_at = ?, staging_path = NULL "
+            "WHERE sha256 = ?", (now, now, sha))
+
     def clear_staging(self, sha: str) -> None:
         self.db.execute("UPDATE files SET staging_path = NULL WHERE sha256 = ?", (sha,))
 
@@ -259,7 +297,8 @@ class Ledger:
 
     def stats(self) -> dict:
         row = self.db.execute(
-            "SELECT COUNT(*) n, COALESCE(SUM(size), 0) bytes FROM files"
+            "SELECT COUNT(*) n, COALESCE(SUM(size), 0) bytes FROM files "
+            "WHERE discarded_at IS NULL"
         ).fetchone()
         pending = self.db.execute(
             "SELECT COUNT(*) n, COALESCE(SUM(size), 0) bytes "

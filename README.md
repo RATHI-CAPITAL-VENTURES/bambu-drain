@@ -138,6 +138,10 @@ into a clip of the length you ask for. Output is `timelapse-reconstructed.mp4`,
 deliberately not `timelapse.mp4`, so the archive never blurs what the printer
 made with what we assembled.
 
+The Pi does this itself before shipping (`[render]`), which is the only place
+it can once the footage is being discarded. The tool is for a print that
+arrived with a `video/` folder and nothing to watch.
+
 ## Day to day
 
 ```sh
@@ -157,6 +161,12 @@ See `config.example.toml`. What to drain is a registry, not a branch — one
 archive folder and `delete` deciding whether the original goes. Firmware images
 are archived but never deleted, because the printer needs them to stay put to
 apply an update.
+
+Chamber footage and thumbnails are marked `discard_after_timelapse`: once a
+print's timelapse is verified on the Mac they are deleted from the Pi instead
+of shipped, so a print folder holds the sliced model and the timelapse. A print
+that ends up with no timelapse keeps its footage. Remove the flag from a rule
+to keep everything.
 
 ## Licence
 

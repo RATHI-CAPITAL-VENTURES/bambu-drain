@@ -21,7 +21,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from . import imagefs
-from .gadget import MassStorageGadget
+from .gadget import GadgetError, MassStorageGadget
 from .lock import AlreadyRunning, single_instance
 from .ledger import Ledger
 
@@ -146,6 +146,11 @@ TEARDOWN_SECONDS = 30
 # this recently before a sliced file landed is that print's own recording, and
 # the sliced file takes it over — records, staged files and all.
 START_SKEW_SECONDS = 120
+
+# Used space that no file accounts for, above which a pass repairs the stick.
+# One full chamber segment: big enough that directory and bitmap overhead never
+# trips it, small enough to act long before the printer runs out of room.
+RECLAIM_ABOVE_BYTES = 256 * 1024**2
 
 _UNNAMED = re.compile(r"^\d{2}_\d{2}_\d{2}(-\d+)?$")
 
@@ -376,6 +381,19 @@ class Drainer:
             present = self.gadget.media_present
         except (OSError, AttributeError):
             return  # gadget not created yet; the gadget service owns that
+        try:
+            # A pass that died between detaching and re-attaching (see
+            # `cycle_in`) leaves no drive at all, which the printer cannot
+            # tell from an unplugged cable either.
+            if self.gadget.exists and not self.gadget.bound:
+                log.warning("gadget was detached at the start of a pass — re-attaching")
+                self.ledger.event("gadget_reattached", "found unbound at start of pass")
+                self.gadget.bind()
+        except (OSError, AttributeError):
+            pass
+        except GadgetError as exc:
+            # Still worth putting the medium back below; try again next pass.
+            log.error("could not re-attach the gadget: %s", exc)
         if present:
             return
         log.warning(
@@ -385,6 +403,27 @@ class Drainer:
         )
         self.ledger.event("medium_reinserted", "found absent at start of pass")
         self.gadget.cycle_in()
+
+    def _reclaim(self, orphaned: int) -> int:
+        """Give back space that is marked used and belongs to no file.
+
+        The stick is ejected and unmounted here. Orphans are what a printer
+        with a stale view of the stick leaves behind (see `cycle_in`), and
+        what one switched off mid-recording leaves too. Either way nothing
+        else ever frees them, and the stick is 32 GB of them eventually.
+        """
+        d = self.cfg.drain
+        try:
+            imagefs.reclaim(self.cfg.gadget.image, d.mount_point, self.cfg.gadget.fs)
+        except (imagefs.MountError, OSError) as exc:
+            log.error("could not reclaim %.1f GB of orphaned space: %s",
+                      orphaned / 1024**3, exc)
+            self.ledger.event("reclaim_error", str(exc)[:200])
+            return 0
+        log.warning("reclaimed %.1f GB the stick counted as used with no file "
+                    "behind it", orphaned / 1024**3)
+        self.ledger.event("reclaimed", f"{orphaned} bytes of orphaned clusters")
+        return orphaned
 
     # -- a pass ------------------------------------------------------------
 
@@ -422,6 +461,10 @@ class Drainer:
         moved = 0
         total = 0
         truncated = False
+        # Did WE alter the filesystem? If so the printer must be made to
+        # re-read it — see `MassStorageGadget.cycle_in`.
+        changed = False
+        reclaimed = 0
 
         try:
             pre_mtime = self.cfg.gadget.image.stat().st_mtime
@@ -455,6 +498,7 @@ class Drainer:
                         # died before the delete. Re-delete and move on.
                         if rule.delete and not dry_run:
                             src.unlink(missing_ok=True)
+                            changed = True
                         continue
 
                     ends = self.closes_session(rule, src, st.st_size)
@@ -488,18 +532,27 @@ class Drainer:
                     self.ledger.record_drained(
                         sha, src.name, str(target.relative_to(d.staging)), st.st_size,
                         target, session=session, src_mtime=st.st_mtime,
-                        ends_session=ends,
+                        ends_session=ends, discard=rule.discard_after_timelapse,
                     )
                     if rule.delete:
                         src.unlink(missing_ok=True)
+                        changed = True
 
                     moved += 1
                     total += st.st_size
                     log.info("drained %s (%.1f MB)", src.name, st.st_size / 1024**2)
+                orphaned = 0 if dry_run else imagefs.orphaned_bytes(mp)
+            if orphaned > RECLAIM_ABOVE_BYTES:
+                # Set first: fsck writes to the image even if it then fails.
+                changed = True
+                reclaimed = self._reclaim(orphaned)
         finally:
             # Unconditional. If the mount or the copy blew up, the printer still
             # gets its stick back.
-            self.gadget.cycle_in()
+            if changed:
+                self.gadget.cycle_in(reconnect=True)
+            else:
+                self.gadget.cycle_in()
             # Record the mtime our own deletions caused, and what the printer's
             # was before we touched it, so the next pass does not mistake our
             # writes for the printer waking up.
@@ -516,6 +569,8 @@ class Drainer:
             "moved": moved,
             "bytes": total,
             "truncated": truncated,
+            "reconnected": changed,
+            "reclaimed_bytes": reclaimed,
             "budget_seconds": budget,
             "seconds": time.monotonic() - started,
         }

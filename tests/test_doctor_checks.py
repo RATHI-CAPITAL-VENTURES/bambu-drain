@@ -96,6 +96,17 @@ class TestRenderDependency(unittest.TestCase):
         self.assertIsNone(next((k for k in res if "ffmpeg" in k), None))
 
 
+class TestReclaimDependency(TestRenderDependency):
+    def test_a_missing_fsck_is_reported(self):
+        # Without it orphaned space is never given back, and nothing says so
+        # until the printer runs out of room.
+        with mock.patch("shutil.which", return_value=None):
+            res = self._labels(available=True)
+        label = next((k for k in res if "fsck.exfat" in k), None)
+        self.assertIsNotNone(label)
+        self.assertFalse(res[label])
+
+
 class TestSessionClosingRule(unittest.TestCase):
     """The config-drift check that took a day to notice by hand."""
 

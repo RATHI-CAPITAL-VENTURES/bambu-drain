@@ -4,8 +4,10 @@ We use configfs rather than the legacy `g_mass_storage` module for one reason:
 it lets us change the *medium* without tearing down the *device*. Writing an
 empty string to `lun.0/file` is exactly a card reader with the card pulled out —
 the printer keeps seeing a USB drive attached, it just reports no media for a
-few seconds. Unbinding the UDC instead would make the whole device vanish and
-re-enumerate, which is a far ruder thing to do to a machine mid-job.
+few seconds. Unbinding the UDC instead makes the whole device vanish and
+re-enumerate, which is ruder — so it is done only when it has to be: after a
+pass that changed the filesystem, because nothing less makes the printer
+re-read it. See `cycle_in`.
 
 Nothing in here is safe to run while the printer is writing. The caller owns
 that decision; see drain.py.
@@ -188,8 +190,45 @@ class MassStorageGadget:
         # image. Ejecting and immediately mounting has raced on slower hosts.
         time.sleep(settle_seconds)
 
-    def cycle_in(self) -> None:
-        self.insert()
+    def cycle_in(self, reconnect: bool = False, settle_seconds: float = 1.0,
+                 attach_timeout: float = 5.0) -> None:
+        """Hand the medium back — with `reconnect`, as a newly plugged-in drive.
+
+        A media change alone does NOT make the printer re-read the filesystem.
+        It keeps the allocation bitmap it loaded when it first mounted the
+        drive, so space the Pi frees is invisible to it, and it writes that
+        stale bitmap back over ours the next time it allocates. Measured on
+        2026-10-02: 9.2 GB marked used on a stick holding 3 MB of files, every
+        orphaned run a recording drained weeks earlier, and a printer refusing
+        to record for "not enough storage" with 23 GB free on disk.
+
+        Only a disconnect makes it mount afresh, so a pass that changed the
+        filesystem detaches the whole device while the medium goes back in.
+        A pass that changed nothing keeps the gentler media change.
+        """
+        if not reconnect:
+            self.insert()
+            return
+        try:
+            self.unbind()
+        finally:
+            # Whatever happened to the unbind, the medium goes back.
+            self.insert()
+        time.sleep(settle_seconds)
+        self.bind()
+        # Enumeration takes a moment, and a status snapshot taken inside it
+        # reads "not attached" — a false alarm after every real drain.
+        deadline = time.monotonic() + attach_timeout
+        while time.monotonic() < deadline and self.host_state() != "configured":
+            time.sleep(0.2)
+
+    def host_state(self) -> str | None:
+        """What the USB controller thinks: `configured` once a host has us."""
+        try:
+            state = Path("/sys/class/udc") / self.available_udc() / "state"
+            return state.read_text().strip()
+        except (OSError, GadgetError):
+            return None
 
     # -- host activity -----------------------------------------------------
 

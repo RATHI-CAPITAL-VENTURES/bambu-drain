@@ -71,12 +71,21 @@ dest   = "video"
 # Measured over 61 segments: full ones were all 240.2-240.4 MB, every genuine
 # ending came in at 12-91%, and nothing landed between 92% and 99%.
 ends_session_if_short = 0.95
+# Raw material, not something to keep. Once the print's timelapse — the
+# printer's own or one rebuilt from these segments — is checksum-verified on
+# the Mac, the staged copy is deleted instead of shipped, so the archive holds
+# the model and the timelapse and not 5 GB of footage per print. A print that
+# ends up with NO timelapse (fewer than render.min_segments, a failed render,
+# a session that never closed) ships its footage as before: it is then the
+# only record there is. Remove the line to keep everything.
+discard_after_timelapse = true
 delete = true
 
 [[rule]]
 glob   = "**/*.avi"
 group  = "print"
 dest   = "video"
+discard_after_timelapse = true
 delete = true
 
 # The sliced file the printer receives when you press print. It is the only
@@ -112,18 +121,21 @@ delete = true
 glob   = "**/*.jpg"
 group  = "print"
 dest   = "thumbnails"
+discard_after_timelapse = true
 delete = true
 
 [[rule]]
 glob   = "**/*.jpeg"
 group  = "print"
 dest   = "thumbnails"
+discard_after_timelapse = true
 delete = true
 
 [[rule]]
 glob   = "**/*.png"
 group  = "print"
 dest   = "thumbnails"
+discard_after_timelapse = true
 delete = true
 
 # Firmware images you drop on the stick on purpose. Archived, never deleted —
