@@ -38,7 +38,7 @@ class FakeGadget:
     def cycle_out(self, settle_seconds=1.0):
         self.cycled_out += 1
 
-    def cycle_in(self):
+    def cycle_in(self, reconnect=False):
         self.cycled_in += 1
 
 

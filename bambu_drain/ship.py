@@ -12,7 +12,6 @@ import logging
 import shlex
 import subprocess
 import time
-import time
 from pathlib import Path, PurePosixPath
 
 from . import render as render_mod
@@ -173,9 +172,26 @@ class Shipper:
             log.info("%s unreachable; %d files waiting", self.cfg.ship.host, len(pending))
             return {"shipped": 0, "bytes": 0, "pending": len(pending), "offline": True}
 
+        # Raw material goes last, so that by the time its turn comes the
+        # timelapse made from it has already been shipped in this same pass.
+        pending.sort(key=lambda r: bool(r["discard"])
+                     and not self.ledger.is_timelapse(r))
+
         shipped = 0
         total = 0
+        discarded = 0
+        freed = 0
         for row in pending:
+            # A timelapse is never raw material, whatever rule caught it: it
+            # would be waiting on itself.
+            if (row["discard"] and row["session"]
+                    and not self.ledger.is_timelapse(row)):
+                fate = self._raw_material(row)
+                if fate == "discarded":
+                    discarded += 1
+                    freed += row["size"]
+                if fate != "ship":
+                    continue
             staging_path = row["staging_path"]
             if not staging_path:
                 continue
@@ -249,7 +265,36 @@ class Shipper:
 
         if shipped:
             self.ledger.event("ship", f"{shipped} files, {total} bytes")
-        return {"shipped": shipped, "bytes": total, "pending": len(pending) - shipped}
+        if discarded:
+            log.info("discarded %d raw file(s) (%.1f MB) — their timelapse is "
+                     "on %s", discarded, freed / 1024**2, self.cfg.ship.host)
+            self.ledger.event("discard", f"{discarded} files, {freed} bytes")
+        return {"shipped": shipped, "bytes": total, "discarded": discarded,
+                "pending": len(pending) - shipped - discarded}
+
+    def _raw_material(self, row) -> str:
+        """What to do with a `discard_after_timelapse` file: one of
+        `discarded` (done here), `wait`, or `ship`.
+
+        The footage is deleted only once a timelapse of its print is
+        checksum-verified on the ship host — not when one has merely been
+        rendered. A rebuilt timelapse sits in staging un-fsynced until it
+        ships, and deleting its segments before then would make a power cut
+        cost both.
+        """
+        session = row["session"]
+        if self.ledger.timelapse_verified(session):
+            if row["staging_path"]:
+                Path(row["staging_path"]).unlink(missing_ok=True)
+            self.ledger.record_discarded(row["sha256"])
+            return "discarded"
+        if self.ledger.timelapse_coming(session):
+            # There is one and it did not make it across this pass. Keep the
+            # footage staged and try again next time.
+            return "wait"
+        # No timelapse, or one that was lost and will never arrive: this is
+        # the only record of the print.
+        return "ship"
 
     def push_status(self, local: Path) -> bool:
         """Copy the status file to the Mac so RIA can read it locally.

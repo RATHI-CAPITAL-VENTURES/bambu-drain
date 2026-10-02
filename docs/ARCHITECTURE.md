@@ -80,9 +80,70 @@ that as an error rather than mounting underneath it.
 
 **Why change the medium rather than unbind the UDC.** Writing an empty string to
 `lun.0/file` is exactly a card reader with the card pulled out: the USB device
-stays enumerated and only the media goes away. Unbinding the UDC would make the
+stays enumerated and only the media goes away. Unbinding the UDC makes the
 whole device vanish and re-enumerate, which is a much ruder thing to do to a
-machine that may be mid-job.
+machine that may be mid-job — so a pass that changed nothing still only changes
+the medium. A pass that deleted something has to do the ruder thing, below.
+
+### A media change does not make the printer re-read the stick (found 2026-10-02)
+
+The printer reported "not enough storage left on USB" and had saved no chamber
+recording for three prints. `bambu-drain status` said `ok` throughout, and the
+stick held 3 MB of files.
+
+What was on disk, measured with the image attached read-only:
+
+- `dump.exfat`: 302,248 of 1,048,416 clusters marked used — **9.2 GB allocated
+  on a filesystem holding two files.**
+- Walking the allocation bitmap: 140 runs, the large ones 240.3 MB each — the
+  size of a chamber segment plus its thumbnail.
+- Hashing the JPEG at the head of each run against the ledger: **63 of 63 were
+  files the Pi had drained and deleted**, between 2026-09-02 and 2026-09-28.
+
+So clusters the Pi freed were being marked used again, and only the printer
+writes to the image besides us. The explanation that fits: the printer does not
+remount on a media change. It keeps the allocation bitmap it loaded when the
+drive was first plugged in, never sees what the Pi frees, counts its own free
+space down from that first mount, and writes its stale bitmap blocks back over
+ours whenever it allocates. That last part is inference — nothing on the Pi can
+see inside the printer — but it predicts all three measurements, and it
+predicts the timing: the Pi last rebooted (a real re-enumeration) on 09-23, the
+printer wrote 28 GB to a 32 GB stick after that, and stopped recording on 09-30.
+
+Directory entries were not affected (no deleted file ever reappeared), which is
+why this hid for a month: every drain looked right, every file arrived, and the
+printer's idea of free space quietly diverged from the disk's.
+
+Two fixes, both in the drain pass:
+
+1. **A pass that changed the filesystem reconnects the drive.**
+   `gadget.cycle_in(reconnect=True)` unbinds the UDC, inserts the medium, and
+   binds again, so the printer meets a freshly plugged-in stick and mounts it
+   from scratch. It then waits up to 5 s for the controller to read
+   `configured`, because a status snapshot taken mid-enumeration says "printer
+   not attached". A pass that died between unbind and bind is healed at the
+   start of the next one, the same way an absent medium is.
+2. **Orphaned space is reclaimed.** With the stick mounted, the pass compares
+   `statvfs` used space with what the files and directories actually hold;
+   above `RECLAIM_ABOVE_BYTES` (256 MB, one segment) it unmounts, runs
+   `fsck.exfat -s -y`, and deletes the `LOST+FOUND` that produces. Logged as a
+   `reclaimed` event, or `reclaim_error`. It is skipped on a truncated pass
+   (files not yet copied are still on the stick), bounded by a 120 s timeout,
+   and not repeated for the same orphan figure — a missing or ineffective fsck
+   would otherwise run, and disconnect the drive, on every poll.
+
+Things tried that did not work, so nobody tries them again:
+
+- **`fsck.exfat -y` reports the volume `clean` and frees nothing.** Orphaned
+  clusters are only handled by `-s`, which turns them into files. On 1.2.9 that
+  made 135 files totalling 9.3 GB; deleting them took the stick to 384 KB used.
+- **`fsck.exfat -n` cannot be used to detect the problem** for the same reason.
+  The bitmap count against the file sizes is the only signal.
+
+Also seen and left alone: with the printer idle, a pass runs every
+`poll_seconds`, so the medium is ejected and re-inserted about 2,800 times a
+day and every mount logs `Volume was not properly unmounted`. Those passes
+change nothing on disk and so do not reconnect.
 
 ## The idle signal
 
@@ -451,11 +512,54 @@ The archive is one folder per print:
 
 ```
 prints/3DBenchy_09_02_26/
-  timelapse.mp4
-  video/       22 chamber segments, 5.06 GB
-  thumbnails/
+  3DBenchy.gcode.3mf
+  timelapse.mp4            or timelapse-reconstructed.mp4
 models/2026/09/     sliced models keep the dated layout — they belong to no print
 ```
+
+### Only the model and the timelapse are kept
+
+The chamber segments and thumbnails are still drained, grouped and staged
+exactly as before — sessions are inferred from them, and a missing timelapse is
+rebuilt from them. They are just not shipped. A rule marked
+`discard_after_timelapse` records that on the ledger row, and the ship loop
+deletes the staged copy once **a timelapse of that print is checksum-verified
+on the Mac**. Before that the archive took `video/` (5 GB for a 4-hour print)
+and `thumbnails/` as well.
+
+The condition is "verified on the Mac", not "rendered": a rebuilt timelapse
+sits in staging, not fsynced, until it ships, and deleting its segments first
+would let one power cut take both. So within a ship pass the kept files go
+first and raw material last, and each raw file is one of three things:
+
+| The print has… | Raw material is… |
+| --- | --- |
+| a timelapse verified on the Mac | deleted from staging (`discard` event) |
+| a timelapse that has not got across yet | left staged, retried next pass |
+| no timelapse, or one that was lost | shipped to `video/` and `thumbnails/`, as before |
+
+"Has not got across yet" means staged, intact and unshipped
+(`Ledger.timelapse_coming`) — not merely that a row exists. A rebuilt timelapse
+truncated by a power cut is marked shipped-unverified and never retried;
+footage that waited on it would wait until staging filled and the drain
+stopped. That was the first thing an independent review of this change found.
+
+The last row is deliberate. Fewer than `render.min_segments`, a render that
+failed, or a session that timed out unclosed all leave the footage as the only
+record of the print, and it is kept rather than thrown away on a technicality.
+
+A discarded row stays in the ledger with `discarded_at` set: it is how a
+re-drained copy is recognised, and the modal segment size is computed from
+those rows. `status` no longer counts them as archived.
+
+"Has a timelapse" is decided by `Ledger.timelapses()` — a non-empty
+`timelapse*.mp4` directly in the print folder. The render check used
+`dest_rel LIKE '%timelapse%.mp4'`, which also matched every segment of a print
+whose model was named "Timelapse stand"; harmless when it only skipped a
+render, not when it decides a deletion. Both now share the one definition.
+
+Prints already in the archive keep their `video/` and `thumbnails/` folders.
+Nothing here reaches back to delete them.
 
 **Nothing the printer writes identifies the job.** No print id, no model name, no
 session marker — only filenames and mtimes. So sessions are inferred, and the

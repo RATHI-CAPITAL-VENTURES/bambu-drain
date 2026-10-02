@@ -98,6 +98,33 @@ sudo bambu-drain status
 
 ---
 
+## The printer says "not enough storage left on USB"
+
+…while `bambu-drain status` says `ok` and the stick is empty. The printer is
+not reading the stick's real free space: it kept the picture it had when the
+drive was first plugged in, and counts down from there. The story is in
+[ARCHITECTURE](ARCHITECTURE.md#a-media-change-does-not-make-the-printer-re-read-the-stick-found-2026-10-02).
+
+Since 0.9.7 the drain reconnects the drive after any pass that deleted
+something, and reclaims orphaned space on its own. To check by hand:
+
+```sh
+sudo dump.exfat /srv/bambu-drain/stick.img | grep Clusters   # used vs free
+sudo journalctl -u bambu-drain | grep -i reclaim
+```
+
+A stick with a few files and gigabytes of used clusters is this. To force the
+printer to mount it afresh right now — the same as unplugging and replugging:
+
+```sh
+sudo systemctl restart bambu-drain-gadget bambu-drain
+```
+
+`fsck.exfat -y` will call such a volume `clean` and change nothing; only `-s`
+touches orphaned clusters.
+
+---
+
 ## Files drain but never reach the Mac
 
 ```sh

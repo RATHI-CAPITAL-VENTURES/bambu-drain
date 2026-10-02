@@ -56,6 +56,12 @@ class Rule:
     starts_session: bool = False
     # ...and its filename is the project name, so it can name the folder too.
     names_session: bool = False
+    # Raw material, not something to keep: chamber segments and thumbnails.
+    # Once the print's timelapse is verified on the ship host, the staged copy
+    # is deleted instead of shipped. A print that ends up with NO timelapse —
+    # too few segments, a failed render, a session that timed out unclosed —
+    # ships these as before, because then they are the only record of it.
+    discard_after_timelapse: bool = False
 
     def __post_init__(self) -> None:
         if self.group not in ("", "print"):

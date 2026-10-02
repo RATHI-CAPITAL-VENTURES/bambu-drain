@@ -171,6 +171,14 @@ def cmd_doctor(args) -> int:
               "sudo apt-get install -y ffmpeg — without it, prints whose "
               "timelapse went to the printer's internal storage get nothing")
 
+    # Same shape: without it, space the stick has lost is never given back.
+    import shutil
+    from . import imagefs
+    tool = imagefs.reclaim_tool(cfg.gadget.fs)
+    check(f"{tool} (reclaims orphaned space on the stick)",
+          shutil.which(tool) is not None,
+          "sudo apt-get install -y exfatprogs dosfstools")
+
     check(f"ssh to {cfg.ship.host}", shipper.reachable(),
           f"ssh-copy-id -i {cfg.ship.ssh_key}.pub {cfg.ship.host}")
     return 0 if ok else 1

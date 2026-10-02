@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import fnmatch
 import hashlib
+import os
+import shutil
 import subprocess
 import time
 from contextlib import contextmanager
@@ -14,6 +16,15 @@ CHUNK = 1024 * 1024
 
 class MountError(RuntimeError):
     pass
+
+
+class UnmountError(MountError):
+    """The Pi still holds the image. Never swallow this one."""
+
+
+# A full check of a 32 GB image takes seconds. Minutes means it is stuck, and
+# the printer has no medium for as long as it is.
+FSCK_TIMEOUT_SECONDS = 120
 
 
 def _run(*args: str) -> str:
@@ -54,10 +65,61 @@ def mounted(image: Path, mount_point: Path, fs: str):
                 break
             time.sleep(1.0)
         else:
-            raise MountError(
+            raise UnmountError(
                 f"could not unmount {mount_point} — NOT re-inserting media, "
                 "because the printer and the Pi would both hold it"
             )
+
+
+# How each filesystem gives back clusters that are marked used and belong to no
+# file: the command, and the folder it salvages them into (deleted afterwards).
+# `fsck.exfat -y` alone reports such a volume "clean" and frees nothing; only
+# `-s` touches orphans, by turning them into files. `fsck.vfat -a` frees them
+# outright.
+_RECLAIM = {
+    "exfat": (("fsck.exfat", "-s", "-y"), "LOST+FOUND"),
+    "fat32": (("fsck.vfat", "-a"), None),
+}
+
+
+def reclaim_tool(fs: str) -> str:
+    return _RECLAIM[fs][0][0]
+
+
+def orphaned_bytes(mount_point: Path) -> int:
+    """Space the filesystem counts as used that no file or directory holds.
+
+    Zero for anything that is not a mounted filesystem of its own: measured
+    against a plain directory this would be the rest of the disk.
+    """
+    if not os.path.ismount(mount_point):
+        return 0
+    vfs = os.statvfs(mount_point)
+    used = (vfs.f_blocks - vfs.f_bfree) * vfs.f_frsize
+    held = 0
+    for path in mount_point.rglob("*"):
+        try:
+            held += path.lstat().st_blocks * 512
+        except OSError:
+            continue
+    return max(0, used - held)
+
+
+def reclaim(image: Path, mount_point: Path, fs: str) -> None:
+    """Free orphaned clusters. The image must be ejected and unmounted."""
+    cmd, salvaged = _RECLAIM[fs]
+    try:
+        proc = subprocess.run([*cmd, str(image)], capture_output=True, text=True,
+                              timeout=FSCK_TIMEOUT_SECONDS)
+    except subprocess.TimeoutExpired as exc:
+        raise MountError(f"{cmd[0]} still running after {exc.timeout:.0f}s") from exc
+    # fsck exits 1 for "errors found and corrected", which is the point.
+    if proc.returncode not in (0, 1):
+        raise MountError(f"{' '.join(cmd)}: exit {proc.returncode}: "
+                         f"{(proc.stderr or proc.stdout).strip()[:200]}")
+    if salvaged:
+        with mounted(image, mount_point, fs) as mp:
+            shutil.rmtree(mp / salvaged, ignore_errors=True)
 
 
 def sha256(path: Path) -> str:

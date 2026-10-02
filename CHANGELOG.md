@@ -4,6 +4,35 @@
 header equals `VERSION`, is new relative to the base branch, and increases
 monotonically. A MINOR bump is a milestone and must ship a retro.
 
+## 0.9.7 — 2026-10-02
+
+### Fixed
+
+- **The printer said "not enough storage left on USB" with 23 GB free, and
+  had recorded nothing for three prints.** A media change does not make it
+  re-read the stick: it kept the allocation bitmap from its first mount, never
+  saw what the Pi freed, and wrote the stale bitmap back — 9.2 GB marked used
+  on a stick holding 3 MB, all 63 orphaned runs checked being recordings
+  drained weeks earlier. A pass that deletes anything now detaches and
+  re-attaches the whole drive (`cycle_in(reconnect=True)`) so the printer
+  mounts it fresh, and a pass that finds more than 256 MB of used space with
+  no file behind it reclaims it (`fsck.exfat -s -y`, then delete
+  `LOST+FOUND`). `fsck.exfat -y` alone calls that volume clean and frees
+  nothing. `doctor` checks the fsck tool is installed.
+- **A model named "Timelapse…" would have counted as having a timelapse.**
+  The render check matched `%timelapse%.mp4` anywhere in the path. It is now
+  a non-empty `timelapse*.mp4` directly in the print folder.
+
+### Changed
+
+- **Only the model and the timelapse are archived.** Rules marked
+  `discard_after_timelapse` — chamber segments and thumbnails in
+  `config.example.toml` — are deleted from staging once that print's timelapse
+  is checksum-verified on the Mac, instead of being shipped. A print with no
+  timelapse ships its footage as before. An existing config needs the flag
+  added to turn this on; prints already in the archive are not touched.
+- `status` no longer counts discarded files as archived.
+
 ## 0.9.6 — 2026-09-24
 
 ### Changed
