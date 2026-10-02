@@ -18,6 +18,15 @@ class MountError(RuntimeError):
     pass
 
 
+class UnmountError(MountError):
+    """The Pi still holds the image. Never swallow this one."""
+
+
+# A full check of a 32 GB image takes seconds. Minutes means it is stuck, and
+# the printer has no medium for as long as it is.
+FSCK_TIMEOUT_SECONDS = 120
+
+
 def _run(*args: str) -> str:
     proc = subprocess.run(args, capture_output=True, text=True)
     if proc.returncode != 0:
@@ -56,7 +65,7 @@ def mounted(image: Path, mount_point: Path, fs: str):
                 break
             time.sleep(1.0)
         else:
-            raise MountError(
+            raise UnmountError(
                 f"could not unmount {mount_point} — NOT re-inserting media, "
                 "because the printer and the Pi would both hold it"
             )
@@ -99,7 +108,11 @@ def orphaned_bytes(mount_point: Path) -> int:
 def reclaim(image: Path, mount_point: Path, fs: str) -> None:
     """Free orphaned clusters. The image must be ejected and unmounted."""
     cmd, salvaged = _RECLAIM[fs]
-    proc = subprocess.run([*cmd, str(image)], capture_output=True, text=True)
+    try:
+        proc = subprocess.run([*cmd, str(image)], capture_output=True, text=True,
+                              timeout=FSCK_TIMEOUT_SECONDS)
+    except subprocess.TimeoutExpired as exc:
+        raise MountError(f"{cmd[0]} still running after {exc.timeout:.0f}s") from exc
     # fsck exits 1 for "errors found and corrected", which is the point.
     if proc.returncode not in (0, 1):
         raise MountError(f"{' '.join(cmd)}: exit {proc.returncode}: "

@@ -92,13 +92,31 @@ class Ledger:
         """
         rows = self.db.execute(
             "SELECT * FROM files WHERE session = ? AND size > 0", (session,))
-        out = []
-        for r in rows:
-            parts = r["dest_rel"].split("/")
-            if (len(parts) == 3 and parts[0] == "prints"
-                    and parts[2].startswith("timelapse") and parts[2].endswith(".mp4")):
-                out.append(r)
-        return out
+        return [r for r in rows if self.is_timelapse(r)]
+
+    @staticmethod
+    def is_timelapse(row) -> bool:
+        parts = row["dest_rel"].split("/")
+        return (len(parts) == 3 and parts[0] == "prints"
+                and parts[2].startswith("timelapse") and parts[2].endswith(".mp4"))
+
+    def timelapse_coming(self, session: str) -> bool:
+        """Is a timelapse staged, intact, and still waiting to ship?
+
+        Not merely "is there a row". A rebuilt timelapse truncated by a power
+        cut is marked shipped-unverified and never retried, and one whose
+        staged file vanished stays unshipped forever; footage that waited on
+        either would wait until staging filled and the drain stopped.
+        """
+        for r in self.timelapses(session):
+            if r["shipped_at"] is not None or not r["staging_path"]:
+                continue
+            try:
+                if Path(r["staging_path"]).stat().st_size == r["size"]:
+                    return True
+            except OSError:
+                continue
+        return False
 
     def timelapse_verified(self, session: str) -> bool:
         """Is one of the session's timelapses checksum-verified on the ship host?"""

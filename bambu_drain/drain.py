@@ -221,6 +221,10 @@ class Drainer:
         # reason. We remember the mtime we caused and look through it.
         self._own_mtime: float | None = None
         self._printer_mtime: float | None = None
+        # The orphan figure of the last reclaim that failed or freed nothing.
+        # Without it a missing fsck, or one that cannot fix the stick, would
+        # be retried — and the drive disconnected — on every poll, forever.
+        self._reclaim_gave_up_at: int | None = None
 
     # -- gating ------------------------------------------------------------
 
@@ -387,8 +391,8 @@ class Drainer:
             # tell from an unplugged cable either.
             if self.gadget.exists and not self.gadget.bound:
                 log.warning("gadget was detached at the start of a pass — re-attaching")
-                self.ledger.event("gadget_reattached", "found unbound at start of pass")
                 self.gadget.bind()
+                self.ledger.event("gadget_reattached", "found unbound at start of pass")
         except (OSError, AttributeError):
             pass
         except GadgetError as exc:
@@ -402,7 +406,23 @@ class Drainer:
             "has had no storage since."
         )
         self.ledger.event("medium_reinserted", "found absent at start of pass")
-        self.gadget.cycle_in()
+        # As a new drive: the pass that died may already have deleted files.
+        self.gadget.cycle_in(reconnect=True)
+
+    def _should_reclaim(self, orphaned: int, truncated: bool) -> bool:
+        if orphaned <= RECLAIM_ABOVE_BYTES or truncated:
+            # Truncated: the medium is already overdue, and files we have not
+            # copied yet are still on the stick for fsck to "repair".
+            return False
+        if orphaned == self._reclaim_gave_up_at:
+            return False
+        if shutil.which(imagefs.reclaim_tool(self.cfg.gadget.fs)) is None:
+            self._reclaim_gave_up_at = orphaned
+            log.error("%.1f GB of the stick is orphaned and %s is not installed",
+                      orphaned / 1024**3, imagefs.reclaim_tool(self.cfg.gadget.fs))
+            self.ledger.event("reclaim_error", "fsck tool not installed")
+            return False
+        return True
 
     def _reclaim(self, orphaned: int) -> int:
         """Give back space that is marked used and belongs to no file.
@@ -413,8 +433,13 @@ class Drainer:
         else ever frees them, and the stick is 32 GB of them eventually.
         """
         d = self.cfg.drain
+        # Assume the worst until the next pass measures otherwise: if this
+        # frees nothing, the same figure comes back and is not tried again.
+        self._reclaim_gave_up_at = orphaned
         try:
             imagefs.reclaim(self.cfg.gadget.image, d.mount_point, self.cfg.gadget.fs)
+        except imagefs.UnmountError:
+            raise
         except (imagefs.MountError, OSError) as exc:
             log.error("could not reclaim %.1f GB of orphaned space: %s",
                       orphaned / 1024**3, exc)
@@ -542,7 +567,7 @@ class Drainer:
                     total += st.st_size
                     log.info("drained %s (%.1f MB)", src.name, st.st_size / 1024**2)
                 orphaned = 0 if dry_run else imagefs.orphaned_bytes(mp)
-            if orphaned > RECLAIM_ABOVE_BYTES:
+            if self._should_reclaim(orphaned, truncated):
                 # Set first: fsck writes to the image even if it then fails.
                 changed = True
                 reclaimed = self._reclaim(orphaned)

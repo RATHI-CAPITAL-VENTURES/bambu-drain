@@ -74,11 +74,14 @@ class DrainCase(unittest.TestCase):
     def _fake_mount(self, *a, **kw):
         yield self.stick
 
-    def _run(self, g, dry_run=False, orphaned=0, reclaim=None):
+    def _run(self, g, dry_run=False, orphaned=0, reclaim=None, drainer=None,
+             fsck="/usr/sbin/fsck.exfat"):
+        drainer = drainer or Drainer(self.cfg, self.led, g)
         with mock.patch.object(drain.imagefs, "mounted", self._fake_mount), \
              mock.patch.object(drain.imagefs, "orphaned_bytes", return_value=orphaned), \
+             mock.patch.object(drain.shutil, "which", return_value=fsck), \
              mock.patch.object(drain.imagefs, "reclaim", reclaim or mock.Mock()) as rec:
-            result = Drainer(self.cfg, self.led, g).run_once(dry_run=dry_run)
+            result = drainer.run_once(dry_run=dry_run)
         return result, rec
 
 
@@ -117,9 +120,23 @@ class TestReconnectAfterChange(DrainCase):
 
     def test_a_detached_gadget_is_reattached_before_any_gate(self):
         g = FakeGadget(bound=False)
-        self._run(g)
-        self.assertEqual(g.calls[0], "bind")
+        g.last_host_write = lambda: time.time()      # printer busy: gate closed
+        self.cfg = config.from_dict({
+            "gadget": {"image": str(self.root / "stick.img")},
+            "drain": {"idle_minutes": 5, "staging": str(self.root / "staging")},
+            "rule": [{"glob": "**/*.mp4", "dest": "video"}],
+        })
+        result, _ = self._run(g)
+        self.assertIsNotNone(result["skipped"])
+        self.assertEqual(g.calls, ["bind"])
         self.assertIn("gadget_reattached", [r["kind"] for r in self.led.recent_events()])
+
+    def test_an_absent_medium_comes_back_as_a_new_drive(self):
+        # The pass that died may already have deleted files.
+        g = FakeGadget()
+        g.media_present = False
+        self._run(g)
+        self.assertEqual(g.calls[0], "in+reconnect")
 
     def test_a_failed_reattach_does_not_stop_the_pass(self):
         g = FakeGadget(bound=False)
@@ -161,7 +178,53 @@ class TestReclaim(DrainCase):
         self.assertIn("reclaim_error", [r["kind"] for r in self.led.recent_events()])
 
 
+    def test_a_reclaim_that_cannot_work_is_not_retried_every_poll(self):
+        # Otherwise: fsck and a USB disconnect every 30 seconds, forever.
+        g = FakeGadget()
+        d = Drainer(self.cfg, self.led, g)
+        boom = mock.Mock(side_effect=imagefs.MountError("exit 4"))
+        self._run(g, orphaned=9 * 1024**3, reclaim=boom, drainer=d)
+        _, rec = self._run(g, orphaned=9 * 1024**3, drainer=d)
+        rec.assert_not_called()
+        self.assertEqual(g.calls[-2:], ["out", "in"])
+        # A different figure means something changed; worth one more try.
+        _, rec = self._run(g, orphaned=10 * 1024**3, drainer=d)
+        rec.assert_called_once()
+
+    def test_a_missing_fsck_is_reported_once_and_never_disconnects(self):
+        g = FakeGadget()
+        d = Drainer(self.cfg, self.led, g)
+        for _ in range(3):
+            _, rec = self._run(g, orphaned=9 * 1024**3, drainer=d, fsck=None)
+            rec.assert_not_called()
+        self.assertEqual(g.calls, ["out", "in"] * 3)
+        kinds = [r["kind"] for r in self.led.recent_events()]
+        self.assertEqual(kinds.count("reclaim_error"), 1)
+
+    def test_a_truncated_pass_does_not_fsck_files_it_has_not_copied(self):
+        self._source("a.mp4")
+        self._source("b.mp4", b"y" * 4096)
+        g = FakeGadget()
+        d = Drainer(self.cfg, self.led, g)
+        with mock.patch.object(Drainer, "eject_budget", return_value=-1):
+            result, rec = self._run(g, orphaned=9 * 1024**3, drainer=d)
+        self.assertTrue(result["truncated"])
+        rec.assert_not_called()
+
+    def test_a_failed_unmount_is_never_swallowed(self):
+        g = FakeGadget()
+        boom = mock.Mock(side_effect=imagefs.UnmountError("still mounted"))
+        with self.assertRaises(imagefs.UnmountError):
+            self._run(g, orphaned=9 * 1024**3, reclaim=boom)
+
+
 class TestImagefsReclaim(unittest.TestCase):
+    def test_a_hung_fsck_is_an_error_not_a_wait(self):
+        with mock.patch.object(imagefs.subprocess, "run",
+                               side_effect=imagefs.subprocess.TimeoutExpired("fsck", 120)):
+            with self.assertRaises(imagefs.MountError):
+                imagefs.reclaim(Path("/x/stick.img"), Path("/mnt/x"), "exfat")
+
     def test_a_plain_directory_reports_no_orphans(self):
         # Measured against a directory this would be the rest of the disk, and
         # the drain would run fsck on every pass.

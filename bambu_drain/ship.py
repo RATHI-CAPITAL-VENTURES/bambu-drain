@@ -174,14 +174,18 @@ class Shipper:
 
         # Raw material goes last, so that by the time its turn comes the
         # timelapse made from it has already been shipped in this same pass.
-        pending.sort(key=lambda r: bool(r["discard"]))
+        pending.sort(key=lambda r: bool(r["discard"])
+                     and not self.ledger.is_timelapse(r))
 
         shipped = 0
         total = 0
         discarded = 0
         freed = 0
         for row in pending:
-            if row["discard"] and row["session"]:
+            # A timelapse is never raw material, whatever rule caught it: it
+            # would be waiting on itself.
+            if (row["discard"] and row["session"]
+                    and not self.ledger.is_timelapse(row)):
                 fate = self._raw_material(row)
                 if fate == "discarded":
                     discarded += 1
@@ -284,11 +288,12 @@ class Shipper:
                 Path(row["staging_path"]).unlink(missing_ok=True)
             self.ledger.record_discarded(row["sha256"])
             return "discarded"
-        if self.ledger.timelapses(session):
+        if self.ledger.timelapse_coming(session):
             # There is one and it did not make it across this pass. Keep the
             # footage staged and try again next time.
             return "wait"
-        # No timelapse and none coming: this is the only record of the print.
+        # No timelapse, or one that was lost and will never arrive: this is
+        # the only record of the print.
         return "ship"
 
     def push_status(self, local: Path) -> bool:

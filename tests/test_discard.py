@@ -112,6 +112,32 @@ class TestDiscard(DiscardCase):
         self.remote_sha[f"prints/{S}/timelapse-reconstructed.mp4"] = self.tl[0]
         self.assertEqual(self.ship()["discarded"], 4)
 
+    def test_a_timelapse_lost_to_a_power_cut_releases_the_footage(self):
+        # Truncated in staging: marked shipped-unverified and never retried.
+        # Footage waiting on it would sit in staging until the drain stopped.
+        self.print_with()
+        self.tl[1].write_bytes(b"")
+        result = self.ship()
+        self.assertIn("local_corrupt", [r["kind"] for r in self.led.recent_events()])
+        self.assertEqual(result["discarded"], 0)
+        self.assertEqual(len([r for r in self.rsynced if "video/" in r]), 3)
+        self.assertEqual(self.led.unshipped(), [])
+
+    def test_a_timelapse_that_vanished_from_staging_releases_the_footage(self):
+        self.print_with()
+        self.tl[1].unlink()
+        self.ship()
+        self.assertEqual(len([r for r in self.rsynced if "video/" in r]), 3)
+
+    def test_a_timelapse_caught_by_a_discard_rule_still_ships(self):
+        # A config with the timelapse rule removed: `**/*.mp4` takes it.
+        self.add(f"prints/{S}/video/ipcam-record.0.mp4", discard=True, ends=True)
+        self.add(f"prints/{S}/timelapse.mp4", discard=True)
+        result = self.ship()
+        self.assertEqual((result["shipped"], result["discarded"], result["pending"]),
+                         (1, 1, 0))
+        self.assertEqual(self.rsynced, [f"prints/{S}/timelapse.mp4"])
+
     def test_a_print_with_no_timelapse_keeps_its_footage(self):
         # Too few segments, a failed render, a session that timed out: the
         # footage is then the only record of the print.

@@ -127,7 +127,10 @@ Two fixes, both in the drain pass:
    `statvfs` used space with what the files and directories actually hold;
    above `RECLAIM_ABOVE_BYTES` (256 MB, one segment) it unmounts, runs
    `fsck.exfat -s -y`, and deletes the `LOST+FOUND` that produces. Logged as a
-   `reclaimed` event, or `reclaim_error`.
+   `reclaimed` event, or `reclaim_error`. It is skipped on a truncated pass
+   (files not yet copied are still on the stick), bounded by a 120 s timeout,
+   and not repeated for the same orphan figure — a missing or ineffective fsck
+   would otherwise run, and disconnect the drive, on every poll.
 
 Things tried that did not work, so nobody tries them again:
 
@@ -533,7 +536,13 @@ first and raw material last, and each raw file is one of three things:
 | --- | --- |
 | a timelapse verified on the Mac | deleted from staging (`discard` event) |
 | a timelapse that has not got across yet | left staged, retried next pass |
-| no timelapse at all | shipped to `video/` and `thumbnails/`, as before |
+| no timelapse, or one that was lost | shipped to `video/` and `thumbnails/`, as before |
+
+"Has not got across yet" means staged, intact and unshipped
+(`Ledger.timelapse_coming`) — not merely that a row exists. A rebuilt timelapse
+truncated by a power cut is marked shipped-unverified and never retried;
+footage that waited on it would wait until staging filled and the drain
+stopped. That was the first thing an independent review of this change found.
 
 The last row is deliberate. Fewer than `render.min_segments`, a render that
 failed, or a session that timed out unclosed all leave the footage as the only
