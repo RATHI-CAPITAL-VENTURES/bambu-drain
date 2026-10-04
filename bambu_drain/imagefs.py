@@ -127,6 +127,18 @@ def is_dirty(image: Path, fs: str) -> bool:
     return bool(flags & _EXFAT_DIRTY)
 
 
+def loop_attached(image: Path) -> bool:
+    """Is a loop device backed by this image — i.e. is it mounted on the Pi?"""
+    target = str(image.resolve())
+    for bf in Path("/sys/block").glob("loop*/loop/backing_file"):
+        try:
+            if bf.read_text().strip() == target:
+                return True
+        except OSError:
+            continue
+    return False
+
+
 def clear_dirty(image: Path, fs: str) -> bool:
     """Check and mark clean a volume left dirty. True if it was dirty.
 
@@ -142,6 +154,10 @@ def clear_dirty(image: Path, fs: str) -> bool:
     """
     if not is_dirty(image, fs):
         return False
+    if loop_attached(image):
+        # A pass killed mid-mount leaves it attached; fsck under a live mount
+        # is how a filesystem gets corrupted rather than repaired.
+        raise MountError(f"{image} is still loop-mounted on the Pi — not running fsck")
     try:
         proc = subprocess.run(["fsck.exfat", "-p", str(image)], capture_output=True,
                               text=True, timeout=FSCK_TIMEOUT_SECONDS)

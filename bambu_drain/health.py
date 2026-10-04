@@ -51,6 +51,10 @@ def usb_state() -> str | None:
 def _volume_dirty(cfg) -> bool | None:
     from . import imagefs
     try:
+        # Mid-pass, Linux has the flag set on disk for its own mount. That is
+        # not what the printer will see, and `status` must not say it is.
+        if imagefs.loop_attached(cfg.gadget.image):
+            return None
         return imagefs.is_dirty(cfg.gadget.image, cfg.gadget.fs)
     except OSError:
         return None

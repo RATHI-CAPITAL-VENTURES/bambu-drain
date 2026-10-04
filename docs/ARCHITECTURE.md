@@ -171,6 +171,26 @@ the two flag bytes and, if VolumeDirty is set, runs `fsck.exfat -p` — a check,
 not a blind bit-flip, because a volume flagged dirty may really need repair.
 `volume_cleaned` / `volume_dirty` events record it, and `status` reports a
 dirty stick as a problem, since that is what the printer sees as unformatted.
+
+The details that make it safe, each found by review before it shipped:
+
+- **A clean counts as a change, so the drive reconnects.** The likeliest case
+  is an idle printer that refused the dirty volume and so wrote nothing; with
+  nothing deleted, a plain media change would hand back a clean volume the
+  printer never re-reads.
+- **Not on a truncated pass or a dry run**, for the reason reclaim isn't:
+  undrained files are still on the stick for fsck to "repair".
+- **Never under a live mount.** `clear_dirty` refuses if any loop device is
+  backed by the image (a pass SIGTERMed mid-mount leaves one), and the boot
+  path takes the drain lock first.
+- **One retry an hour after a failure.** A printer refusing the volume stays
+  idle, so the gate is always open; without the backoff it would fsck and
+  log every 30 s.
+- **`status` reports the flag as unknown while the Pi has it mounted**, since
+  Linux holds it set for its own mount mid-pass.
+
+Observed after the fix: the printer held the drive for four hours and left
+VolumeFlags at `0x0`, so clean is the steady state, not an assumption.
 FAT32 keeps its flag in the second FAT entry and is not handled: this
 deployment is exFAT and the printer's FAT32 behaviour is unmeasured.
 

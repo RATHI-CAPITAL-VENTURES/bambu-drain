@@ -33,10 +33,16 @@ def cmd_gadget(args) -> int:
             # A brownout is also the likeliest way the flag got set.
             from . import imagefs
             if not gadget.exists:
+                from .lock import AlreadyRunning, single_instance
                 try:
-                    if imagefs.clear_dirty(cfg.gadget.image, cfg.gadget.fs):
-                        print("stick was flagged dirty; checked and marked clean")
-                        ledger.event("volume_cleaned", "at gadget create")
+                    # The drain lock: a pass must not be mid-mount underneath.
+                    with single_instance(cfg.drain_lock_path):
+                        if imagefs.clear_dirty(cfg.gadget.image, cfg.gadget.fs):
+                            print("stick was flagged dirty; checked and marked clean")
+                            ledger.event("volume_cleaned", "at gadget create")
+                except AlreadyRunning:
+                    print("warning: a drain pass holds the lock; not checking "
+                          "the dirty flag", file=sys.stderr)
                 except (imagefs.MountError, OSError) as exc:
                     print(f"warning: stick is flagged dirty: {exc}", file=sys.stderr)
                     ledger.event("volume_dirty", str(exc)[:200])

@@ -152,6 +152,9 @@ START_SKEW_SECONDS = 120
 # trips it, small enough to act long before the printer runs out of room.
 RECLAIM_ABOVE_BYTES = 256 * 1024**2
 
+# After a dirty volume fsck could not clean, how long before trying again.
+DIRTY_RETRY_SECONDS = 3600
+
 _UNNAMED = re.compile(r"^\d{2}_\d{2}_\d{2}(-\d+)?$")
 
 
@@ -225,6 +228,7 @@ class Drainer:
         # Without it a missing fsck, or one that cannot fix the stick, would
         # be retried — and the drive disconnected — on every poll, forever.
         self._reclaim_gave_up_at: int | None = None
+        self._dirty_retry_after: float = 0.0
 
     # -- gating ------------------------------------------------------------
 
@@ -409,24 +413,39 @@ class Drainer:
         # As a new drive: the pass that died may already have deleted files.
         self.gadget.cycle_in(reconnect=True)
 
-    def _clear_dirty(self) -> None:
+    def _clear_dirty(self) -> bool:
         """Hand the printer a volume it will mount. See `imagefs.clear_dirty`.
 
+        Returns True if fsck ran — succeeded or not, it may have written.
+
         Every pass, not just the ones that reconnect: the printer only mounts
-        on a reconnect, but a dirty flag left now is still there then.
-        Clean is the steady state — Linux clears a flag it set itself — so
-        this reads two bytes and returns, and fsck runs only on a real mark.
+        on a reconnect, but a dirty flag left now is still there then. Clean
+        is the observed steady state (the printer held the drive for hours on
+        10-04 and left the flag clear), so this normally reads two bytes and
+        returns. Skipped on a truncated pass, like reclaim: files not yet
+        copied are still on the stick for fsck to "repair".
         """
-        if not self.cfg.gadget.image.exists():
-            return
+        image = self.cfg.gadget.image
+        if not image.exists() or time.time() < self._dirty_retry_after:
+            return False
         try:
-            if imagefs.clear_dirty(self.cfg.gadget.image, self.cfg.gadget.fs):
-                log.warning("the stick was flagged dirty; checked and marked clean")
-                self.ledger.event("volume_cleaned", "dirty flag cleared by fsck -p")
+            if not imagefs.is_dirty(image, self.cfg.gadget.fs):
+                return False
+        except OSError:
+            return False
+        try:
+            imagefs.clear_dirty(image, self.cfg.gadget.fs)
         except (imagefs.MountError, OSError) as exc:
+            # One attempt an hour, not one every poll: the printer refuses a
+            # dirty volume, so it stays idle, so the gate is always open.
+            self._dirty_retry_after = time.time() + DIRTY_RETRY_SECONDS
             log.error("the stick is flagged dirty and could not be cleaned: %s — "
                       "the printer will call it unformatted", exc)
             self.ledger.event("volume_dirty", str(exc)[:200])
+            return True
+        log.warning("the stick was flagged dirty; checked and marked clean")
+        self.ledger.event("volume_cleaned", "dirty flag cleared by fsck -p")
+        return True
 
     def _should_reclaim(self, orphaned: int, truncated: bool) -> bool:
         if orphaned <= RECLAIM_ABOVE_BYTES or truncated:
@@ -586,7 +605,12 @@ class Drainer:
                     total += st.st_size
                     log.info("drained %s (%.1f MB)", src.name, st.st_size / 1024**2)
                 orphaned = 0 if dry_run else imagefs.orphaned_bytes(mp)
-            self._clear_dirty()
+            if not dry_run and not truncated and self._clear_dirty():
+                # fsck wrote to the image, and only a reconnect makes the
+                # printer read what it wrote. Without this, an idle printer
+                # that refused the dirty volume — and so wrote nothing to
+                # drain — would never be shown the clean one.
+                changed = True
             if self._should_reclaim(orphaned, truncated):
                 # Set first: fsck writes to the image even if it then fails.
                 changed = True
