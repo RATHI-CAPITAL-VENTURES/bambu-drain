@@ -267,10 +267,12 @@ USB port cannot do it either — it lights the LED and browns out.
 
 `0x50000` is not proof the supply is fine. On 2026-10-04 it read exactly that
 while `dmesg` showed `Undervoltage detected!` every 30 s, in step with drain
-passes, and the Pi had rebooted itself the day before. Count the events:
+passes, on a supply that had been swapped in the day before. Count the events,
+and bucket them by hour — a burst that starts hours after boot is not inrush:
 
 ```sh
 sudo dmesg | grep -c "Undervoltage detected"
+sudo dmesg -T | grep "Undervoltage detected" | awk '{print $3, substr($4,1,2)":00"}' | uniq -c
 ```
 
 If a 2 A+ charger still under-volts, the loss is in the cable: thin conductors

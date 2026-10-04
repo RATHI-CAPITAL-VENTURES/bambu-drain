@@ -4,6 +4,16 @@
 header equals `VERSION`, is new relative to the base branch, and increases
 monotonically. A MINOR bump is a milestone and must ship a retro.
 
+## 0.10.1 — 2026-10-04
+
+### Docs
+
+- **The 10-03 reboot was the supply being swapped, not a brownout.** 0.10.0's
+  ARCHITECTURE, TROUBLESHOOTING and retro said the Pi rebooted unprompted.
+  Corrected, with the per-hour under-voltage counts: none for 11.5 hours on
+  the new supply, then ~70 an hour, tracking drain passes. The dirty flag
+  predates that reboot.
+
 ## 0.10.0 — 2026-10-04
 
 
