@@ -48,6 +48,18 @@ def usb_state() -> str | None:
         return None
 
 
+def _volume_dirty(cfg) -> bool | None:
+    from . import imagefs
+    try:
+        # Mid-pass, Linux has the flag set on disk for its own mount. That is
+        # not what the printer will see, and `status` must not say it is.
+        if imagefs.loop_attached(cfg.gadget.image):
+            return None
+        return imagefs.is_dirty(cfg.gadget.image, cfg.gadget.fs)
+    except OSError:
+        return None
+
+
 def problems(payload: dict) -> list[str]:
     """What is wrong, in plain language. Empty means healthy.
 
@@ -63,6 +75,9 @@ def problems(payload: dict) -> list[str]:
         out.append("USB gadget is not bound to the UDC")
     elif not g.get("media_present"):
         out.append("no medium inserted — the printer sees an empty card reader")
+
+    if g.get("volume_dirty"):
+        out.append("stick is flagged dirty — the printer will call it unformatted")
 
     st = g.get("usb_state")
     if st == "not attached":
@@ -127,6 +142,7 @@ def snapshot(cfg, ledger, gadget, drainer) -> dict:
             "image_bytes": image_bytes,
             "idle_seconds": round(gadget.idle_seconds(), 1) if cfg.gadget.image.exists() else None,
             "usb_state": usb_state(),
+            "volume_dirty": _volume_dirty(cfg),
         },
         "drain": {
             "blocked_reason": drainer.blocked_reason(),

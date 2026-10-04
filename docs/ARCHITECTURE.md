@@ -140,6 +140,64 @@ Things tried that did not work, so nobody tries them again:
 - **`fsck.exfat -n` cannot be used to detect the problem** for the same reason.
   The bitmap count against the file sizes is the only signal.
 
+### …and a remount exposes a dirty volume, which the printer calls "not formatted" (found 2026-10-04)
+
+Two days after the reconnect shipped, the printer showed the drive as **not
+formatted**. The Pi had the medium in, the controller read `configured`, and a
+fresh enumeration (`new address 1` in `dmesg`) produced no write to the image
+at all: the printer was enumerating the drive and declining to mount it. The
+last time it had written was the reconnect after the Oct 2 20:00 drain.
+
+The boot region was fine — signature, checksums, backup all matched, and
+`fsck.exfat -n` said `clean`. One thing was set: **VolumeFlags = 0x2,
+VolumeDirty.** Clearing it with `fsck.exfat -p` and reconnecting had the
+printer writing within one second.
+
+Why it is set and why it stays set:
+
+- Linux sets VolumeDirty when it mounts read-write and clears it on unmount —
+  but **only if it was clean when it mounted.** A flag it finds already set is
+  left set. That is why every drain pass for weeks has logged `Volume was not
+  properly unmounted`: one dirty mark, once made, is permanent.
+- What made the first mark is not known. A brownout mid-pass would do it, and
+  this Pi under-volts (below); so would the printer losing the medium mid-write.
+- It never mattered before 0.9.7, because the printer never remounted. The
+  reconnect fix made every drain a remount, and every remount met a dirty
+  volume. The manual fix on 10-02 worked only because the `fsck -y` that
+  preceded it had cleared the flag as a side effect.
+
+Fix: after every pass's unmount, and at `gadget create` (boot), the drain reads
+the two flag bytes and, if VolumeDirty is set, runs `fsck.exfat -p` — a check,
+not a blind bit-flip, because a volume flagged dirty may really need repair.
+`volume_cleaned` / `volume_dirty` events record it, and `status` reports a
+dirty stick as a problem, since that is what the printer sees as unformatted.
+
+The details that make it safe, each found by review before it shipped:
+
+- **A clean counts as a change, so the drive reconnects.** The likeliest case
+  is an idle printer that refused the dirty volume and so wrote nothing; with
+  nothing deleted, a plain media change would hand back a clean volume the
+  printer never re-reads.
+- **Not on a truncated pass or a dry run**, for the reason reclaim isn't:
+  undrained files are still on the stick for fsck to "repair".
+- **Never under a live mount.** `clear_dirty` refuses if any loop device is
+  backed by the image (a pass SIGTERMed mid-mount leaves one), and the boot
+  path takes the drain lock first.
+- **One retry an hour after a failure.** A printer refusing the volume stays
+  idle, so the gate is always open; without the backoff it would fsck and
+  log every 30 s.
+- **`status` reports the flag as unknown while the Pi has it mounted**, since
+  Linux holds it set for its own mount mid-pass.
+
+Observed after the fix: the printer held the drive for four hours and left
+VolumeFlags at `0x0`, so clean is the steady state, not an assumption.
+FAT32 keeps its flag in the second FAT entry and is not handled: this
+deployment is exFAT and the printer's FAT32 behaviour is unmeasured.
+
+The Pi was also under-volting every ~30 s at the time, in step with the drain
+passes (one event per 90 s with the loop stopped), and rebooted unprompted on
+10-03 at 13:25. That is a supply problem, not a code one — see TROUBLESHOOTING.
+
 Also seen and left alone: with the printer idle, a pass runs every
 `poll_seconds`, so the medium is ejected and re-inserted about 2,800 times a
 day and every mount logs `Volume was not properly unmounted`. Those passes

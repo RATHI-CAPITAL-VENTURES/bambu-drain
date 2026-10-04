@@ -4,192 +4,22 @@
 header equals `VERSION`, is new relative to the base branch, and increases
 monotonically. A MINOR bump is a milestone and must ship a retro.
 
-## 0.9.7 — 2026-10-02
+## 0.10.0 — 2026-10-04
+
 
 ### Fixed
 
-- **The printer said "not enough storage left on USB" with 23 GB free, and
-  had recorded nothing for three prints.** A media change does not make it
-  re-read the stick: it kept the allocation bitmap from its first mount, never
-  saw what the Pi freed, and wrote the stale bitmap back — 9.2 GB marked used
-  on a stick holding 3 MB, all 63 orphaned runs checked being recordings
-  drained weeks earlier. A pass that deletes anything now detaches and
-  re-attaches the whole drive (`cycle_in(reconnect=True)`) so the printer
-  mounts it fresh, and a pass that finds more than 256 MB of used space with
-  no file behind it reclaims it (`fsck.exfat -s -y`, then delete
-  `LOST+FOUND`). `fsck.exfat -y` alone calls that volume clean and frees
-  nothing. `doctor` checks the fsck tool is installed.
-- **A model named "Timelapse…" would have counted as having a timelapse.**
-  The render check matched `%timelapse%.mp4` anywhere in the path. It is now
-  a non-empty `timelapse*.mp4` directly in the print folder.
+- **The printer called the drive "not formatted" and stopped using it.** The
+  exFAT VolumeDirty flag was set, and the printer will not mount a dirty
+  volume. Linux never clears a flag it found already set, so one mark lasted
+  forever; it only started to matter when 0.9.7 made the printer remount after
+  every drain. The drain now checks the flag after each pass and at `gadget
+  create`, and runs `fsck.exfat -p` when it is set. `status` reports a dirty
+  stick as a problem.
+- **The 0.9.7 deploy crashed the drain service once:** drain and ship start
+  together and both added the new ledger columns; the second hit "duplicate
+  column". That is now tolerated.
 
-### Changed
-
-- **Only the model and the timelapse are archived.** Rules marked
-  `discard_after_timelapse` — chamber segments and thumbnails in
-  `config.example.toml` — are deleted from staging once that print's timelapse
-  is checksum-verified on the Mac, instead of being shipped. A print with no
-  timelapse ships its footage as before. An existing config needs the flag
-  added to turn this on; prints already in the archive are not touched.
-- `status` no longer counts discarded files as archived.
-
-## 0.9.6 — 2026-09-24
-
-### Changed
-
-- **Print folders are named model-first, with a short date and no time of
-  day:** `Voronoi_Classic_Mustang_3D_Printable_Car_Model_09_23_26`, or
-  `09_23_26` for a job whose sliced file carried a preset name. Was
-  `2026-09-23_1100_Voronoi_…`. Finder is scanned by name, and the time was
-  fourteen characters nobody read. Dropping it makes a same-day repeat
-  ordinary, so a collision is now checked against every session the ledger
-  has ever named rather than the one before it — A, then B, then A in one
-  afternoon would otherwise have merged the second A into the first. The
-  archive migration (`regroup_archive.py`) names the same way. Folders
-  already on the Mac keep their old names.
-
-### Found, not yet fixed
-
-- **A drained backlog escapes the six-hour hold**, because the hold is
-  measured against the printer's file mtimes and a backlog's oldest segments
-  are drained first. The Mustang print's first sixteen segments shipped before
-  the session was recognised as open, and its reconstruction was rendered
-  from the 43 left. Written up in `ARCHITECTURE.md` under the hold.
-
-## 0.9.5 — 2026-09-16
-
-### Fixed
-
-- **A print's timelapse and its thumbnails were filed in a folder of their
-  own, and the print got a reconstruction it did not need.** The end of a
-  print is one flush — timelapse thumbnail, short final segment, `_mini`
-  thumbnail, timelapse, 0.18 s end to end — and the segment closed the
-  session before the three files behind it arrived. `TEARDOWN_SECONDS` was
-  declared for exactly this in 0.6.0, recorded in that retro as applied in
-  the daemon, and read only by the archive migration. It is wired now, at
-  30 s and measured from the latest closer; the migration is corrected too,
-  since its closers-only window missed the `_mini` thumbnail.
-- **A thumbnail that beat the sliced file to the stick became a one-file
-  print.** A job started from Handy starts recording at once, so the first
-  thumbnail landed 1-2 s before the `.gcode.3mf`, opened a nameless session,
-  and was held six hours as an unfinished print. A sliced file now takes over
-  a nameless open session that opened within `START_SKEW_SECONDS` (120) —
-  staged files moved, ledger rows repointed — and the migration does the
-  same retroactively. `regroup_archive.py --src <archive>` now reproduces the
-  two-folder layout from the night of 2026-09-15 that shipped as four.
-
-Both found because "the Pi hasn't drained my last two prints": it had, and
-Finder showed four folders and a `timelapse.mp4` two folders away from its
-print. Also corrected in the docs: the printer's clock is UTC+8, and the
-sliced file does not reliably lead the recording by fifteen minutes.
-
-## 0.9.4 — 2026-09-15
-
-### Fixed
-
-- **`setup/04-tailscale.sh` was shipped tested for syntax only, and its first
-  real run found three bugs — each fatal for the next person too.**
-
-  1. **`ssh -n host 'tee file' <<EOF` writes an empty file.** `-n` sets stdin
-     to `/dev/null`, so the heredoc never leaves the Mac and `tee` truncates
-     the target. The script wiped the Pi's `ishan-mac` alias that way, which
-     would have surfaced later as "the Mac is unreachable". The write now goes
-     through a plain `ssh` and is **read back** before the script continues.
-  2. **`tailscale up --ssh` broke Mac → Pi.** Tailscale SSH takes over port 22
-     on the tailnet address, and the default ACL runs it in *check mode*:
-     every session demands a fresh browser login, which `BatchMode` refuses.
-     The verification hung at "To authenticate, visit …". The flag is gone,
-     `tailscale set --ssh=false` clears it on a Pi that had it, and the
-     tailnet carries the ordinary key-based sshd that already worked.
-  3. **The Pi's tailnet name was unknown to `known_hosts`**, so the first
-     `BatchMode` connection was refused with "Host key verification failed".
-     The host key is now read over the still-trusted LAN connection *before*
-     anything changes and pinned under the tailnet name and IP — not
-     trusted-on-first-use, since we already hold it.
-
-  Both verification steps now run with `BatchMode=yes`, because a check that
-  can prompt does not verify what the unattended loops will see.
-
-  Run for real on 2026-09-15: `bambu-drain-pi.tail755927.ts.net` ↔
-  `ishans-m2-macbook-pro`, both directions, Pi → Mac as root.
-
-## 0.9.3 — 2026-09-05
-
-### Fixed
-
-- **A data-integrity problem is reported once, not once a minute.**
-  `health.problems()` rendered `"data integrity event {N}m ago"`. That string
-  feeds RIA's `watch` job, which notifies when it CHANGES — and N grows every
-  minute, so one incident became an hour of notifications. The elapsed time is
-  gone from the verdict; it remains in the status payload and in the human
-  output. A test asserts the verdict is identical at 2 minutes and at 30.
-
-  Stability was already tested on the healthy path. It was not tested on the
-  alarm path, which is the only path anyone is woken by.
-
-## 0.9.2 — 2026-09-05
-
-### Added
-
-- **`setup/04-tailscale.sh`** — put both machines on a tailnet and stop
-  depending on a shared LAN.
-
-  The LAN assumption has broken twice in different ways. The Mac's DHCP lease
-  moves and the Pi's mDNS cache holds the old address, surfacing as "no route to
-  host" — three times in two days. And the Mac joining a **different network**
-  breaks it outright: the Pi cannot ship, and the Mac cannot reach the Pi at its
-  hardcoded LAN address either.
-
-  A tailnet name does not move, works off-LAN, and is encrypted. The script
-  rewrites **both** SSH configs and verifies each direction, including Pi → Mac
-  as root, which is how the ship loop actually connects.
-
-  It must be run from the same network as the Pi — the last time that has to be
-  true.
-
-## 0.9.1 — 2026-09-04
-
-### Fixed
-
-- **Any print needing more than one drain pass silently lost its timelapse.**
-  Shipping deletes the staged segments, and a missing timelapse is rebuilt *from*
-  those segments. A 5.79 GB print took several drain passes; the ship loop ran
-  between them, saw a session that had not closed yet, and cleared staging. By
-  the time the final short segment closed the session, one segment remained —
-  below `min_segments`, so the render was skipped without a word.
-
-  A session's files are now held until the print ends. The render then has its
-  raw material, and everything ships together.
-
-- **A session that never closes no longer wedges the pipeline.** A printer
-  switched off mid-run, or a final segment that happens to arrive full-size,
-  would otherwise hold its files — and everything behind them — until staging
-  filled and the drain loop stopped. `max_hold_hours` (6) ships it anyway, with
-  no rebuilt timelapse, which is a far better failure than a stopped system.
-
-## 0.9.0 — 2026-09-04
-
-
-### Added
-
-- **The head clip now opens on the printer working, not parked.** The recording
-  starts before the print does — levelling, heating, the head sitting still — so
-  a 5-second opening was 5 seconds of nothing. `motion_start()` finds the first
-  **sustained** motion and seeks there.
-
-  Measured on a real first segment: seconds 1–5 scored **0.000**, sustained
-  motion began at **29 s**, the purge showed around 41–49 s. Detection returns
-  29 s on that footage.
-
-  "Sustained" is load-bearing — the same segment had a lone `0.037` blip at
-  `t=0` with silence either side, which an instantaneous threshold would have
-  believed.
-
-- `skip_dead_air` and `dead_air_cap` (120 s). A failed detection returns 0 and
-  degrades to the previous behaviour; the cap means a print that genuinely
-  begins slowly loses at most two minutes rather than its whole opening.
-
-Only the head needs this. At one frame per ~9 seconds the body already renders
-half a minute of idling as three frames.
+Retro: `docs/retros/0.10.0.md`.
 
 Older series are archived under `docs/changelog/`.
