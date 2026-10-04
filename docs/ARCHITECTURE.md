@@ -194,9 +194,14 @@ VolumeFlags at `0x0`, so clean is the steady state, not an assumption.
 FAT32 keeps its flag in the second FAT entry and is not handled: this
 deployment is exFAT and the printer's FAT32 behaviour is unmeasured.
 
-The Pi was also under-volting every ~30 s at the time, in step with the drain
-passes (one event per 90 s with the loop stopped), and rebooted unprompted on
-10-03 at 13:25. That is a supply problem, not a code one — see TROUBLESHOOTING.
+The Pi was also under-volting at the time, on a supply fitted the day before
+(the 10-03 13:25 reboot was that swap, not a brownout — first written up here
+as unprompted, which was wrong). Per hour from `dmesg`: none for the first 11.5
+hours, then ~70 an hour from 01:00 to 05:40; one in the hour after the drain
+loop was stopped; five in the first minute after it was restarted. So it
+tracks drain activity, but not only drain activity, since the loop ran all of
+the first 11.5 hours too. Not explained; a supply margin problem, not a code
+one — see TROUBLESHOOTING.
 
 Also seen and left alone: with the printer idle, a pass runs every
 `poll_seconds`, so the medium is ejected and re-inserted about 2,800 times a
