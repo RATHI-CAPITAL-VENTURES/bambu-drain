@@ -29,6 +29,17 @@ def cmd_gadget(args) -> int:
                 print(f"backing image missing: {cfg.gadget.image}", file=sys.stderr)
                 print("run setup/02-create-image.sh first", file=sys.stderr)
                 return 1
+            # Boot is a fresh enumeration, so the printer mounts what it finds.
+            # A brownout is also the likeliest way the flag got set.
+            from . import imagefs
+            if not gadget.exists:
+                try:
+                    if imagefs.clear_dirty(cfg.gadget.image, cfg.gadget.fs):
+                        print("stick was flagged dirty; checked and marked clean")
+                        ledger.event("volume_cleaned", "at gadget create")
+                except (imagefs.MountError, OSError) as exc:
+                    print(f"warning: stick is flagged dirty: {exc}", file=sys.stderr)
+                    ledger.event("volume_dirty", str(exc)[:200])
             gadget.create()
             gadget.bind()
             print(f"gadget {cfg.gadget.name} bound to {gadget.available_udc()}")

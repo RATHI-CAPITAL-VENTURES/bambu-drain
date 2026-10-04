@@ -105,6 +105,54 @@ def orphaned_bytes(mount_point: Path) -> int:
     return max(0, used - held)
 
 
+# exFAT's VolumeFlags: a 16-bit field at byte 106 of the main boot sector, bit
+# 1 = VolumeDirty. Excluded from the boot checksum by the spec, which is what
+# lets a driver flip it on every mount.
+_EXFAT_FLAGS_OFFSET = 106
+_EXFAT_DIRTY = 0x2
+
+
+def is_dirty(image: Path, fs: str) -> bool:
+    """Is the volume flagged as not cleanly unmounted?
+
+    exFAT only. FAT32 keeps its flag in the second FAT entry, behind a parse
+    of the BPB; this deployment is exFAT and the printer's FAT32 behaviour is
+    unmeasured, so FAT32 reports False rather than guessing.
+    """
+    if fs != "exfat":
+        return False
+    with image.open("rb") as fh:
+        fh.seek(_EXFAT_FLAGS_OFFSET)
+        flags = int.from_bytes(fh.read(2), "little")
+    return bool(flags & _EXFAT_DIRTY)
+
+
+def clear_dirty(image: Path, fs: str) -> bool:
+    """Check and mark clean a volume left dirty. True if it was dirty.
+
+    The printer will not mount a dirty volume — it reports the drive as "not
+    formatted" — and Linux never clears a flag it found set: it only clears
+    one it set itself. So one dirty mark, from a brownout mid-pass or the
+    printer losing the medium mid-write, would last forever.
+
+    Done with `fsck.exfat -p` rather than by flipping the bit: a volume that
+    is flagged dirty may really need a repair, and clearing the flag without
+    looking would hand the printer a broken filesystem marked healthy. The
+    image must not be attached or mounted.
+    """
+    if not is_dirty(image, fs):
+        return False
+    try:
+        proc = subprocess.run(["fsck.exfat", "-p", str(image)], capture_output=True,
+                              text=True, timeout=FSCK_TIMEOUT_SECONDS)
+    except subprocess.TimeoutExpired as exc:
+        raise MountError(f"fsck.exfat still running after {exc.timeout:.0f}s") from exc
+    if proc.returncode not in (0, 1) or is_dirty(image, fs):
+        raise MountError(f"fsck.exfat -p: exit {proc.returncode}, volume still dirty: "
+                         f"{(proc.stderr or proc.stdout).strip()[:200]}")
+    return True
+
+
 def reclaim(image: Path, mount_point: Path, fs: str) -> None:
     """Free orphaned clusters. The image must be ejected and unmounted."""
     cmd, salvaged = _RECLAIM[fs]

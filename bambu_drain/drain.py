@@ -409,6 +409,25 @@ class Drainer:
         # As a new drive: the pass that died may already have deleted files.
         self.gadget.cycle_in(reconnect=True)
 
+    def _clear_dirty(self) -> None:
+        """Hand the printer a volume it will mount. See `imagefs.clear_dirty`.
+
+        Every pass, not just the ones that reconnect: the printer only mounts
+        on a reconnect, but a dirty flag left now is still there then.
+        Clean is the steady state — Linux clears a flag it set itself — so
+        this reads two bytes and returns, and fsck runs only on a real mark.
+        """
+        if not self.cfg.gadget.image.exists():
+            return
+        try:
+            if imagefs.clear_dirty(self.cfg.gadget.image, self.cfg.gadget.fs):
+                log.warning("the stick was flagged dirty; checked and marked clean")
+                self.ledger.event("volume_cleaned", "dirty flag cleared by fsck -p")
+        except (imagefs.MountError, OSError) as exc:
+            log.error("the stick is flagged dirty and could not be cleaned: %s — "
+                      "the printer will call it unformatted", exc)
+            self.ledger.event("volume_dirty", str(exc)[:200])
+
     def _should_reclaim(self, orphaned: int, truncated: bool) -> bool:
         if orphaned <= RECLAIM_ABOVE_BYTES or truncated:
             # Truncated: the medium is already overdue, and files we have not
@@ -567,6 +586,7 @@ class Drainer:
                     total += st.st_size
                     log.info("drained %s (%.1f MB)", src.name, st.st_size / 1024**2)
                 orphaned = 0 if dry_run else imagefs.orphaned_bytes(mp)
+            self._clear_dirty()
             if self._should_reclaim(orphaned, truncated):
                 # Set first: fsck writes to the image even if it then fails.
                 changed = True

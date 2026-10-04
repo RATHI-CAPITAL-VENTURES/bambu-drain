@@ -98,6 +98,32 @@ sudo bambu-drain status
 
 ---
 
+## The printer says the drive is "not formatted"
+
+…or ignores it, while the Pi shows the medium in and the USB state
+`configured`. Check the dirty flag:
+
+```sh
+sudo bambu-drain status          # "stick is flagged dirty" in the verdict
+sudo python3 -c "f=open('/srv/bambu-drain/stick.img','rb'); f.seek(106); print(hex(int.from_bytes(f.read(2),'little')))"
+```
+
+`0x2` means VolumeDirty, and the printer will not mount a dirty volume. Since
+0.10.0 the drain clears it after every pass and at boot. By hand:
+
+```sh
+sudo systemctl stop bambu-drain
+sudo bambu-drain gadget eject
+sudo fsck.exfat -p /srv/bambu-drain/stick.img
+sudo systemctl restart bambu-drain-gadget bambu-drain
+```
+
+If the printer writes within a few seconds (`ls -l --time-style=full-iso
+/srv/bambu-drain/stick.img`), that was it. See
+[ARCHITECTURE](ARCHITECTURE.md#and-a-remount-exposes-a-dirty-volume-which-the-printer-calls-not-formatted-found-2026-10-04).
+
+---
+
 ## The printer says "not enough storage left on USB"
 
 …while `bambu-drain status` says `ok` and the stick is empty. The printer is
@@ -231,13 +257,21 @@ vcgencmd get_throttled
 | `0x0` | healthy |
 | bit 0 (`0x...1`) | under-voltage **right now** — fix the supply |
 | bit 2 (`0x...4`) | CPU throttled right now |
-| bit 16 (`0x50000`) | under-voltage has occurred since boot — usually just the boot inrush spike |
+| bit 16 (`0x50000`) | under-voltage has occurred since boot — usually just the boot inrush spike, but check `dmesg` for repeats |
 | bit 18 | throttling has occurred |
 
 Known-bad supplies, both tested: an **old 5 W (1 A) phone charger**
 (under-volts at idle) and an **Arduino/Elegoo Mega's 5V pin** (its linear
 regulator cannot source what a Pi 4 needs under any input). The printer's own
 USB port cannot do it either — it lights the LED and browns out.
+
+`0x50000` is not proof the supply is fine. On 2026-10-04 it read exactly that
+while `dmesg` showed `Undervoltage detected!` every 30 s, in step with drain
+passes, and the Pi had rebooted itself the day before. Count the events:
+
+```sh
+sudo dmesg | grep -c "Undervoltage detected"
+```
 
 If a 2 A+ charger still under-volts, the loss is in the cable: thin conductors
 and hand-twisted joints easily drop the ~0.4 V that trips the flag. Measure

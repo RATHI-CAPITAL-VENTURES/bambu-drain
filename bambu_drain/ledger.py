@@ -51,13 +51,21 @@ class Ledger:
         self.db.execute("PRAGMA synchronous=FULL")
         self.db.executescript(SCHEMA)
         # Additive migration for ledgers created before print grouping.
-        cols = {r[1] for r in self.db.execute("PRAGMA table_info(files)")}
+        self._migrate({r[1] for r in self.db.execute("PRAGMA table_info(files)")})
+
+    def _migrate(self, cols: set[str]) -> None:
         for col, typ in (("session", "TEXT"), ("src_mtime", "REAL"),
                          ("ends_session", "INTEGER DEFAULT 0"),
                          ("discard", "INTEGER DEFAULT 0"),
                          ("discarded_at", "REAL")):
             if col not in cols:
-                self.db.execute(f"ALTER TABLE files ADD COLUMN {col} {typ}")
+                try:
+                    self.db.execute(f"ALTER TABLE files ADD COLUMN {col} {typ}")
+                except sqlite3.OperationalError as exc:
+                    # The drain and ship services start together and both
+                    # migrate; the loser crashed on the 0.9.7 deploy.
+                    if "duplicate column" not in str(exc):
+                        raise
 
     def close(self) -> None:
         self.db.close()
